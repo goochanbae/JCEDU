@@ -175,3 +175,7 @@ th.dragcol.dragging{opacity:.4}
 th.dragcol.drop-l{box-shadow:inset 3px 0 0 var(--accent)}
 th.dragcol.drop-r{box-shadow:inset -3px 0 0 var(--accent)}
 .linkbtn{background:none;border:0;padding:0;color:var(--accent);text-decoration:underline;font-size:12px}
+table.fixed{table-layout:fixed;min-width:900px}
+table.fixed td,table.fixed th{overflow-wrap:anywhere}
+table.fixed td.wrap{white-space:normal;color:var(--muted);font-size:12px}
+.person .stack{min-width:4px}

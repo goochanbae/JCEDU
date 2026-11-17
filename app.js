@@ -17,7 +17,7 @@ const LABELS = {cat:'Category',task:'Task',output:'Output',link:'산출물 링�
 const DAY = 864e5;
 const today = (() => { const d = new Date(); d.setHours(0,0,0,0); return d; })();
 
-let items = [], byId = {}, PEOPLE = ['전원'], me = null, selId = null;
+let items = [], byId = {}, PEOPLE = ['전원'], MEMBERS = [], me = null, selId = null;
 const ui = {
   wbs:{q:'',pic:'',st:'',brand:'',chk:'',mine:false,collapsed:new Set()},
   req:{q:'',pic:'',st:'',brand:'',chk:'',mine:false,collapsed:new Set()},
@@ -106,7 +106,7 @@ async function enter(session){
   if(error){ showOnly('deniedView'); $('deniedMsg').textContent='팀원 정보를 불러오지 못했습니다: '+error.message; return; }
   me = (mem||[]).find(m => m.email.toLowerCase()===email.toLowerCase());
   if(!me){ showOnly('deniedView'); $('deniedMsg').textContent=`${email}은(는) 팀원 목록에 등록되어 있지 않습니다. 관리자에게 등록을 요청하세요.`; return; }
-  PEOPLE = [...mem.map(m=>m.name), '전원'];
+  MEMBERS = mem.map(m=>m.name);
   $('meName').textContent = me.name; $('meRole').textContent = me.role==='admin'?'관리자':me.role==='viewer'?'보기 전용':'';
   ui.wbs.mine = false;
   showOnly('appView');
@@ -117,16 +117,22 @@ async function enter(session){
 async function loadItems(){
   const { data, error } = await sb.from('items').select('*').order('sort_order');
   if(error){ toast('업무를 불러오지 못했습니다: '+error.message); return; }
-  items = data.map(norm); index();
+  items = data.map(norm); index(); refreshPeople();
   $('nW').textContent = items.filter(r=>r.sheet==='WBS'&&r.lvl!=='L1').length;
   $('nR').textContent = items.filter(r=>r.sheet==='REQ'&&r.lvl!=='L1').length;
+}
+// 담당자 목록 = 로그인 계정(members) + 업무에 적힌 PIC·Backup 이름. '전원'은 맨 뒤.
+function refreshPeople(){
+  const names = new Set(MEMBERS);
+  for(const r of items) for(const n of [r.pic, r.bak]) if(n && n!=='전원') names.add(n);
+  PEOPLE = [...[...names].sort((a,b)=>a.localeCompare(b,'ko')), '전원'];
 }
 function norm(r){ for(const k of ['w','prog','kpi_target','kpi_actual','sort_order']) if(r[k]!=null) r[k]=Number(r[k]); return r; }
 function subscribe(){
   sb.channel('items-live').on('postgres_changes', {event:'*', schema:'public', table:'items'}, p => {
     if(p.eventType==='DELETE'){ items = items.filter(r=>r.id!==p.old.id); }
     else { const n = norm(p.new); const i = items.findIndex(r=>r.id===n.id); if(i>=0) items[i]=n; else items.push(n); }
-    index();
+    index(); refreshPeople();
     if(selId && p.new && p.new.id===selId && p.new.updated_by!==me.name) toast(`${p.new.updated_by||'다른 팀원'}님이 이 업무를 방금 수정했습니다.`);
     if(!$('drawer').classList.contains('on')) rerender();
   }).subscribe(st => { const el=$('syncState'); el.textContent = st==='SUBSCRIBED'?'실시간 반영 중':'연결 중'; el.classList.toggle('live', st==='SUBSCRIBED'); });
@@ -135,11 +141,12 @@ function subscribe(){
 // ---------------- dashboard
 function renderDashboard(){
   const W=sheetStats('WBS'), R=sheetStats('REQ'); const all=[...W.ts,...R.ts];
+  const work = items.filter(r=>r.lvl!=='L1');
   const w0=new Date(today); w0.setDate(today.getDate()-((today.getDay()+6)%7)); const w1=new Date(w0); w1.setDate(w0.getDate()+6);
   const due = all.filter(r=>{const e=pd(r.end_date); return e&&e>=w0&&e<=w1;}).sort((a,b)=>pd(a.end_date)-pd(b.end_date));
   const tile=(k,v,s,cls,go)=>`<button class="tile ${cls||''}" type="button" data-go="${go}"><span class="k">${k}</span><span class="v">${v}</span><span class="s">${s}</span></button>`;
   const prog=(lab,S,go)=>`<button class="tile" type="button" data-go="${go}"><span class="k">${lab} 진척</span><span class="v">${pct(S.actual)}</span><div class="pbar"><i style="width:${S.actual*100}%"></i><b style="left:calc(${Math.min(1,S.plan)*100}% - 1px)"></b></div><span class="s">오늘까지 계획 ${pct(S.plan)} · ${S.actual>=S.plan?'계획 이상':'계획보다 '+Math.round((S.plan-S.actual)*100)+'%p 늦음'}</span></button>`;
-  const ppl = [...PEOPLE,'(미지정)'].map(p=>{ const mine=all.filter(r=>p==='(미지정)'?!r.pic:r.pic===p); return {p, cnt:STATUS.map(s=>mine.filter(r=>r.st===s).length), tot:mine.length, late:mine.filter(r=>check(r)==='지연').length}; });
+  const ppl = [...PEOPLE,'(미지정)'].map(p=>{ const mine=work.filter(r=>p==='(미지정)'?!r.pic:r.pic===p); return {p, cnt:STATUS.map(s=>mine.filter(r=>r.st===s).length), none:mine.filter(r=>!STATUS.includes(r.st)).length, tot:mine.length, late:mine.filter(r=>check(r)==='지연').length, bak:work.filter(r=>p!=='(미지정)'&&r.bak===p).length}; }).filter(x=>x.tot||x.bak);
   const max = Math.max(...ppl.map(x=>x.tot),1);
   $('v-dashboard').innerHTML = `
   <div class="grid-tiles">${prog('WBS',W,'wbs')}${prog('대표님 REQ',R,'req')}
@@ -150,8 +157,8 @@ function renderDashboard(){
     ${(()=>{const n=items.filter(r=>r.delete_requested_at).length; return n?tile('삭제 대기',n,me.role==='admin'?'승인이 필요한 삭제 요청':'관리자 승인 대기 중','bad','chk:삭제 대기'):'';})()}</div>
   <div class="cols">
     <div class="panel"><h2 class="sec">담당자별 업무량</h2>
-      <div class="people">${ppl.map(x=>`<div class="person"><span class="nm">${esc(x.p)}</span><div class="stack" style="width:${x.tot/max*100}%">${x.cnt.map((c,i)=>c?`<span class="s-${ST_CLS[STATUS[i]]}" style="width:${c/x.tot*100}%" title="${ST_KO[STATUS[i]]} ${c}건"></span>`:'').join('')}</div><span class="tot">${x.tot}${x.late?` <span style="color:var(--bad)">·${x.late}</span>`:''}</span></div>`).join('')}</div>
-      <div class="legend">${STATUS.map(s=>`<span><i class="s-${ST_CLS[s]}"></i>${ST_KO[s]}</span>`).join('')}<span>숫자 옆 빨간 수 = 지연 건수</span></div></div>
+      <div class="people">${ppl.map(x=>`<div class="person" title="${esc(x.p)} · 담당 ${x.tot}건 (${STATUS.map((s,i)=>x.cnt[i]?ST_KO[s]+' '+x.cnt[i]:'').filter(Boolean).join(', ')}${x.none?', 상태 없음 '+x.none:''}) · Backup ${x.bak}건"><span class="nm">${esc(x.p)}</span><div class="stack" style="width:${Math.max(x.tot/max*100,2)}%">${x.cnt.map((c,i)=>c?`<span class="s-${ST_CLS[STATUS[i]]}" style="width:${c/x.tot*100}%"></span>`:'').join('')}${x.none?`<span style="width:${x.none/x.tot*100}%;background:var(--line)"></span>`:''}</div><span class="tot">${x.tot}${x.late?` <span style="color:var(--bad)">·${x.late}</span>`:''}</span></div>`).join('')}</div>
+      <div class="legend">${STATUS.map(s=>`<span><i class="s-${ST_CLS[s]}"></i>${ST_KO[s]}</span>`).join('')}<span>PIC 기준 · 상시·단발 업무 모두 포함 (카테고리 제외) · 빨간 수 = 지연 건수 · 막대에 마우스를 올리면 상세</span></div></div>
     <div class="panel"><h2 class="sec">이번 주 마감 (${fmtD(w0)} ~ ${fmtD(w1)})</h2>
       ${due.length?`<table style="min-width:0"><thead><tr><th>ID</th><th>업무</th><th>PIC</th><th>상태</th><th>End</th><th></th></tr></thead><tbody>${due.map(r=>`<tr class="task" data-id="${r.id}"><td class="mono">${r.id}</td><td class="t-name"><span class="cat">${esc(r.cat)}</span><span class="tk">${esc(r.task)}</span></td><td class="nw">${esc(r.pic||'')}</td><td>${stChip(r.st)}</td><td class="mono">${fmtD(pd(r.end_date))}</td><td class="nw">${chkChip(check(r))}</td></tr>`).join('')}</tbody></table>`:'<div class="empty">이번 주 마감 업무가 없습니다.</div>'}</div>
   </div>`;
@@ -267,7 +274,7 @@ function renderWeekly(){
     html += `<div class="sheet-h">${lab}</div>`; text += `\n■ ${lab}\n`;
     for(const [t,cls,fn,sub] of secs){
       const rows = items.filter(r=>r.sheet===sheet&&isTask(r)&&fn(r)).sort((a,b)=>(pd(a.end_date)||0)-(pd(b.end_date)||0));
-      html += `<div class="wk-sec"><h3><span class="chip ${cls}">${t}</span>${rows.length}건 <span style="font-weight:400;color:var(--muted);font-size:12px">${sub}</span></h3>${rows.length?`<div class="tablewrap" style="max-height:none"><table><thead><tr><th>ID</th><th>업무</th><th>PIC</th><th>상태</th><th>Start</th><th>End</th><th>D-day</th><th>비고</th></tr></thead><tbody>${rows.map(r=>{const d=dday(r);return `<tr class="task" data-id="${r.id}"><td class="mono">${r.id}</td><td class="t-name"><span class="cat">${esc(r.cat)}</span><span class="tk">${esc(r.task)}</span></td><td class="nw">${esc(r.pic||'')}</td><td>${stChip(r.st)}</td><td class="mono">${fmtD(pd(r.start_date))}</td><td class="mono">${fmtD(pd(r.end_date))}</td><td class="mono dday ${d!=null&&d<0?'neg':''}">${ddTxt(d)}</td><td style="max-width:320px">${esc(r.note||'')}</td></tr>`;}).join('')}</tbody></table></div>`:''}</div>`;
+      html += `<div class="wk-sec"><h3><span class="chip ${cls}">${t}</span>${rows.length}건 <span style="font-weight:400;color:var(--muted);font-size:12px">${sub}</span></h3>${rows.length?`<div class="tablewrap" style="max-height:none"><table class="fixed"><colgroup><col style="width:76px"><col><col style="width:84px"><col style="width:84px"><col style="width:64px"><col style="width:64px"><col style="width:64px"><col style="width:30%"></colgroup><thead><tr><th>ID</th><th>업무</th><th>PIC</th><th>상태</th><th>Start</th><th>End</th><th>D-day</th><th>비고</th></tr></thead><tbody>${rows.map(r=>{const d=dday(r);return `<tr class="task" data-id="${r.id}"><td class="mono">${r.id}</td><td class="t-name"><span class="cat">${esc(r.cat)}</span><span class="tk">${esc(r.task)}</span></td><td class="nw">${esc(r.pic||'')}</td><td>${stChip(r.st)}</td><td class="mono">${fmtD(pd(r.start_date))}</td><td class="mono">${fmtD(pd(r.end_date))}</td><td class="mono dday ${d!=null&&d<0?'neg':''}">${ddTxt(d)}</td><td class="wrap">${esc(r.note||'')}</td></tr>`;}).join('')}</tbody></table></div>`:''}</div>`;
       text += `- ${t} ${rows.length}건\n` + rows.map(r=>`  · [${r.id}] ${r.cat} - ${r.task||''} (${r.pic||'미지정'}, ~${fmtD(pd(r.end_date))})`).join('\n') + (rows.length?'\n':'');
     }
   }
