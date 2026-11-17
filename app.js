@@ -146,7 +146,8 @@ function renderDashboard(){
     ${tile('지연',W.late+R.late,'종료일이 지났는데 완료되지 않음','bad','chk:지연')}
     ${tile('임박',W.soon+R.soon,'3일 이내 마감','warn','chk:임박')}
     ${tile('⚠ 확인 필요',W.warn+R.warn,'완료인데 진척률 미달 · 종료일 없음','caution','chk:⚠')}
-    ${tile('이번 주 마감',due.length,`${fmtD(w0)} ~ ${fmtD(w1)}`,'','weekly')}</div>
+    ${tile('이번 주 마감',due.length,`${fmtD(w0)} ~ ${fmtD(w1)}`,'','weekly')}
+    ${(()=>{const n=items.filter(r=>r.delete_requested_at).length; return n?tile('삭제 대기',n,me.role==='admin'?'승인이 필요한 삭제 요청':'관리자 승인 대기 중','bad','chk:삭제 대기'):'';})()}</div>
   <div class="cols">
     <div class="panel"><h2 class="sec">담당자별 업무량</h2>
       <div class="people">${ppl.map(x=>`<div class="person"><span class="nm">${esc(x.p)}</span><div class="stack" style="width:${x.tot/max*100}%">${x.cnt.map((c,i)=>c?`<span class="s-${ST_CLS[STATUS[i]]}" style="width:${c/x.tot*100}%" title="${ST_KO[STATUS[i]]} ${c}건"></span>`:'').join('')}</div><span class="tot">${x.tot}${x.late?` <span style="color:var(--bad)">·${x.late}</span>`:''}</span></div>`).join('')}</div>
@@ -157,12 +158,30 @@ function renderDashboard(){
 }
 
 // ---------------- WBS / REQ table
+// 업무 뒤 열은 드래그로 순서를 바꿀 수 있고, 순서는 이 브라우저에 저장된다.
+const MOVABLE = {
+  brand:{label:'브랜드', cell:r=>esc(r.brand||'')},
+  cyc:{label:'주기', cell:r=>esc(r.cyc||'')},
+  pic:{label:'PIC / Backup', cls:'nw', cell:r=>`${esc(r.pic||'')}${r.bak?`<span style="color:var(--muted)"> / ${esc(r.bak)}</span>`:''}`},
+  st:{label:'상태', cell:r=>stChip(r.st)},
+  start:{label:'Start', cls:'mono', cell:(r,a)=>isTask(r)?fmt(r.start_date):(a&&a.start?fmt(iso(a.start)):''), g:a=>a.start?fmt(iso(a.start)):''},
+  end:{label:'End', cls:'mono', cell:(r,a)=>isTask(r)?fmt(r.end_date):(a&&a.end?fmt(iso(a.end)):''), g:a=>a.end?fmt(iso(a.end)):''},
+  dday:{label:'D-day', cls:'mono dday', cell:r=>{const d=dday(r); return `<span class="${d!=null&&d<0?'neg':''}">${ddTxt(d)}</span>`;}},
+  chk:{label:'일정 체크', cls:'nw', cell:r=>chkChip(check(r))},
+  prog:{label:'진척 · 실적', cell:(r,a)=>isTask(r)&&r.cyc==='단발'?mini(r.prog,must(r)):(a&&a.prog!=null?mini(a.prog):(r.kpi_target?`<span class="mono" style="color:var(--muted)">월 ${r.kpi_actual??'–'}/${r.kpi_target}</span>`:'')), g:a=>a.prog!=null?mini(a.prog):''}
+};
+const DEFAULT_COLS = Object.keys(MOVABLE);
+let colOrder = (() => { try{ const s=JSON.parse(localStorage.getItem('jcwbs-cols')||'null'); if(Array.isArray(s) && s.length===DEFAULT_COLS.length && DEFAULT_COLS.every(k=>s.includes(k))) return s; }catch(e){} return [...DEFAULT_COLS]; })();
+function saveCols(){ try{ localStorage.setItem('jcwbs-cols', JSON.stringify(colOrder)); }catch(e){} }
+const delChip = r => r.delete_requested_at ? ` <span class="chip k-late" title="${esc(r.delete_requested_by||'')} 요청">삭제 대기</span>` : '';
+
 function rowVisible(r,f){
   if(f.pic && r.pic!==f.pic && r.bak!==f.pic) return false;
   if(f.mine && r.pic!==me.name && r.bak!==me.name) return false;
   if(f.st && r.st!==f.st) return false;
   if(f.brand && r.brand!==f.brand) return false;
-  if(f.chk){ const c=check(r); if(f.chk==='⚠' ? !c.startsWith('⚠') : c!==f.chk) return false; }
+  if(f.chk==='삭제 대기'){ if(!r.delete_requested_at) return false; }
+  else if(f.chk){ const c=check(r); if(f.chk==='⚠' ? !c.startsWith('⚠') : c!==f.chk) return false; }
   if(f.q){ const q=f.q.toLowerCase(); if(![r.id,r.cat,r.task,r.output,r.note,r.pic].some(x=>x&&String(x).toLowerCase().includes(q))) return false; }
   return true;
 }
@@ -173,48 +192,61 @@ function renderTable(sheet){
   let shown=0,total=0,body='';
   for(const g of groups){
     const members = desc(g.id);
+    const gHit = f.chk==='삭제 대기' && g.delete_requested_at;
     const vis = members.filter(r=> rowVisible(r,f) || (r.lvl==='P' && desc(r.id).some(k=>rowVisible(k,f))));
     total += members.length;
-    if(filtering && !vis.length) continue;
+    if(filtering && !vis.length && !gHit) continue;
     shown += vis.length;
     const a = groupAgg(g), col = f.collapsed.has(g.id) && !filtering;
-    body += `<tr class="g1" data-g="${g.id}"><td colspan="2"><span class="tw">${col?'▸':'▾'}</span>${esc(g.num)}</td><td colspan="5">${esc(g.cat)} <span style="font-weight:400;color:var(--muted)">· ${a.n}건</span>${canEdit()?`<button class="addbtn" type="button" data-add="${g.id}">+ 업무 추가</button>`:''}</td><td class="mono">${a.start?fmt(iso(a.start)):''}</td><td class="mono">${a.end?fmt(iso(a.end)):''}</td><td></td><td></td><td>${a.prog!=null?mini(a.prog):''}</td></tr>`;
+    body += `<tr class="g1" data-g="${g.id}"><td><span class="tw">${col?'▸':'▾'}</span>${esc(g.num)}</td><td></td><td>${esc(g.cat)}${delChip(g)} <span style="font-weight:400;color:var(--muted)">· ${a.n}건</span>${canEdit()?`<button class="addbtn" type="button" data-add="${g.id}">+ 업무 추가</button><button class="addbtn" type="button" data-edit="${g.id}">편집</button>`:''}</td>${colOrder.map(k=>`<td class="${MOVABLE[k].cls||''}">${MOVABLE[k].g?MOVABLE[k].g(a):''}</td>`).join('')}</tr>`;
     if(col) continue;
     for(const r of vis){
-      const d=dday(r), c=check(r), m=isTask(r)?must(r):null, a2=r.lvl==='P'?groupAgg(r):null;
+      const a2 = r.lvl==='P' ? groupAgg(r) : null;
       body += `<tr class="task lvl-${r.lvl}${r.id===selId?' sel':''}" data-id="${r.id}">
         <td class="mono">${r.id}</td><td class="mono" style="color:var(--muted)">${esc(r.num)}</td>
-        <td class="t-name"><span class="cat">${esc(r.cat||'')}</span><span class="tk">${esc(r.task||'')}</span></td>
-        <td>${esc(r.brand||'')}</td><td>${esc(r.cyc||'')}</td>
-        <td class="nw">${esc(r.pic||'')}${r.bak?`<span style="color:var(--muted)"> / ${esc(r.bak)}</span>`:''}</td>
-        <td>${stChip(r.st)}</td>
-        <td class="mono">${isTask(r)?fmt(r.start_date):(a2&&a2.start?fmt(iso(a2.start)):'')}</td>
-        <td class="mono">${isTask(r)?fmt(r.end_date):(a2&&a2.end?fmt(iso(a2.end)):'')}</td>
-        <td class="mono dday ${d!=null&&d<0?'neg':''}">${ddTxt(d)}</td>
-        <td class="nw">${chkChip(c)}</td>
-        <td>${isTask(r)&&r.cyc==='단발'?mini(r.prog,m):(a2&&a2.prog!=null?mini(a2.prog):(r.kpi_target?`<span class="mono" style="color:var(--muted)">월 ${r.kpi_actual??'–'}/${r.kpi_target}</span>`:''))}</td></tr>`;
+        <td class="t-name"><span class="cat">${esc(r.cat||'')}${delChip(r)}</span><span class="tk">${esc(r.task||'')}</span></td>
+        ${colOrder.map(k=>`<td class="${MOVABLE[k].cls||''}">${MOVABLE[k].cell(r,a2)}</td>`).join('')}</tr>`;
     }
   }
   const pick=(arr,v,lab)=>`<option value="">${lab}</option>`+arr.map(x=>`<option ${x===v?'selected':''}>${esc(x)}</option>`).join('');
+  const ncols = 3 + colOrder.length;
   $('v-'+key).innerHTML = `
     <div class="toolbar">
       <input type="search" id="${key}-q" placeholder="ID·업무·비고 검색" value="${esc(f.q)}">
       <select id="${key}-pic" aria-label="담당자">${pick(PEOPLE,f.pic,'담당자 전체')}</select>
       <select id="${key}-st" aria-label="진행 상태"><option value="">상태 전체</option>${STATUS.map(s=>`<option value="${s}" ${s===f.st?'selected':''}>${ST_KO[s]}</option>`).join('')}</select>
       <select id="${key}-brand" aria-label="브랜드">${pick(BRANDS,f.brand,'브랜드 전체')}</select>
-      <select id="${key}-chk" aria-label="일정 체크">${pick(['지연','임박','⚠','진행','예정','완료'],f.chk,'일정 체크 전체')}</select>
+      <select id="${key}-chk" aria-label="일정 체크">${pick(['지연','임박','⚠','진행','예정','완료','삭제 대기'],f.chk,'일정 체크 전체')}</select>
       <label><input type="checkbox" id="${key}-mine" ${f.mine?'checked':''}> 내 업무만</label>
       <button class="btn" type="button" id="${key}-fold">${f.collapsed.size?'모두 펼치기':'모두 접기'}</button>
       <button class="btn" type="button" id="${key}-reset">필터 초기화</button>
-      <span class="count">${filtering?`${shown} / ${total}행 표시`:`${total}행`}</span>
+      ${canEdit()?`<button class="btn" type="button" id="${key}-addcat">+ 카테고리 추가</button>`:''}
+      <span class="count">${filtering?`${shown} / ${total}행 표시`:`${total}행`} · <button class="linkbtn" type="button" id="${key}-colreset" title="열 제목을 끌어서 순서를 바꿀 수 있습니다">열 순서 초기화</button></span>
     </div>
-    <div class="tablewrap"><table><thead><tr><th>ID</th><th>#</th><th>업무</th><th>브랜드</th><th>주기</th><th>PIC / Backup</th><th>상태</th><th>Start</th><th>End</th><th>D-day</th><th>일정 체크</th><th>진척 · 실적</th></tr></thead><tbody>${body||'<tr><td colspan="12" class="empty">조건에 맞는 업무가 없습니다.</td></tr>'}</tbody></table></div>`;
-  const on=(id,ev,fn)=>$(id).addEventListener(ev,fn);
+    <div class="tablewrap"><table><thead><tr><th>ID</th><th>#</th><th>업무</th>${colOrder.map(k=>`<th draggable="true" data-col="${k}" class="dragcol" title="끌어서 좌우로 이동">${MOVABLE[k].label}</th>`).join('')}</tr></thead><tbody>${body||`<tr><td colspan="${ncols}" class="empty">조건에 맞는 업무가 없습니다.</td></tr>`}</tbody></table></div>`;
+  const on=(id,ev,fn)=>{ const el=$(id); if(el) el.addEventListener(ev,fn); };
   on(`${key}-q`,'input',e=>{f.q=e.target.value; renderTable(sheet); const i=$(`${key}-q`); i.focus(); i.setSelectionRange(i.value.length,i.value.length);});
   for(const k of ['pic','st','brand','chk']) on(`${key}-${k}`,'change',e=>{f[k]=e.target.value; renderTable(sheet);});
   on(`${key}-mine`,'change',e=>{f.mine=e.target.checked; renderTable(sheet);});
   on(`${key}-fold`,'click',()=>{ if(f.collapsed.size) f.collapsed.clear(); else groups.forEach(g=>f.collapsed.add(g.id)); renderTable(sheet); });
   on(`${key}-reset`,'click',()=>{ Object.assign(f,{q:'',pic:'',st:'',brand:'',chk:'',mine:false}); renderTable(sheet); });
+  on(`${key}-addcat`,'click',()=>addCategory(sheet));
+  on(`${key}-colreset`,'click',()=>{ colOrder=[...DEFAULT_COLS]; saveCols(); renderTable(sheet); });
+  // 열 드래그
+  let dragKey=null;
+  document.querySelectorAll(`#v-${key} th.dragcol`).forEach(th=>{
+    th.addEventListener('dragstart',e=>{ dragKey=th.dataset.col; th.classList.add('dragging'); e.dataTransfer.effectAllowed='move'; try{e.dataTransfer.setData('text/plain',dragKey);}catch(_){} });
+    th.addEventListener('dragend',()=>th.classList.remove('dragging'));
+    th.addEventListener('dragover',e=>{ e.preventDefault(); const r=th.getBoundingClientRect(); th.classList.toggle('drop-l', e.clientX<r.left+r.width/2); th.classList.toggle('drop-r', e.clientX>=r.left+r.width/2); });
+    th.addEventListener('dragleave',()=>th.classList.remove('drop-l','drop-r'));
+    th.addEventListener('drop',e=>{
+      e.preventDefault(); const target=th.dataset.col; const r=th.getBoundingClientRect(); const after=e.clientX>=r.left+r.width/2;
+      th.classList.remove('drop-l','drop-r');
+      if(!dragKey||dragKey===target) return;
+      colOrder=colOrder.filter(k=>k!==dragKey); const i=colOrder.indexOf(target); colOrder.splice(after?i+1:i,0,dragKey);
+      saveCols(); renderTable(sheet);
+    });
+  });
 }
 
 // ---------------- weekly
@@ -297,11 +329,13 @@ async function openDrawer(id){
   drawer.innerHTML = `
     <header><div style="flex:1"><div class="id">${grp?'카테고리':r.id} · ${r.sheet==='WBS'?'WBS':'대표님 REQ'} · ${esc(r.num)}</div><h3>${esc(r.cat||'')}</h3>${r.updated_by?`<div class="id" style="margin-top:4px">마지막 수정 ${esc(r.updated_by)} · ${new Date(r.updated_at).toLocaleString('ko-KR',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'})}</div>`:''}</div><button class="btn" type="button" id="d-close">닫기</button></header>
     <div class="body">
+      ${r.delete_requested_at?`<div class="calc"><div style="background:var(--bad-soft);color:var(--bad)">삭제 대기 · ${esc(r.delete_requested_by||'')} 요청 · ${new Date(r.delete_requested_at).toLocaleString('ko-KR',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'})}${me.role==='admin'?' · 아래에서 승인하거나 반려하세요':' · 관리자 승인 후 삭제됩니다'}</div></div>`:''}
       ${isTask(r)?`<div class="calc"><div>D-day <b>${ddTxt(d)||'–'}</b></div><div>일정 체크 ${chkChip(c)||'–'}</div><div>오늘까지 계획 <b>${pct(m)}</b></div></div>`:''}
       <fieldset ${ro?'disabled':''} style="border:0;padding:0;margin:0;display:flex;flex-direction:column;gap:12px">
       <div class="fgrid">
-        <div class="field full"><label for="f-cat">Category</label><input id="f-cat" value="${esc(r.cat||'')}"></div>
+        <div class="field full"><label for="f-cat">${grp?'카테고리 이름':'Category'}</label><input id="f-cat" value="${esc(r.cat||'')}"></div>
         ${grp?'':`
+        <div class="field full"><label for="f-parent">상위 항목 (바꾸면 그 아래로 이동)</label><select id="f-parent">${parentOptions(r)}</select></div>
         <div class="field full"><label for="f-task">Task</label><textarea id="f-task">${esc(r.task||'')}</textarea></div>
         <div class="field"><label for="f-output">Output / Check</label><input id="f-output" value="${esc(r.output||'')}"></div>
         <div class="field"><label for="f-link">산출물 링크</label><input id="f-link" placeholder="NAS 경로 또는 URL" value="${esc(r.link||'')}"></div>
@@ -318,11 +352,13 @@ async function openDrawer(id){
       ${!grp && canEdit() && r.lvl!=='C' ? `<button class="addbtn" type="button" id="d-addchild" style="align-self:flex-start;margin:0">+ 이 업무 아래에 하위 업무 추가</button>`:''}
       <div class="subhead">변경 이력</div><div class="hist" id="d-hist"><div>불러오는 중…</div></div>
     </div>
-    <footer>${me.role==='admin'&&!grp?'<button class="btn danger" type="button" id="d-del" style="margin-right:auto">삭제</button>':''}<button class="btn" type="button" id="d-cancel">${ro?'닫기':'취소'}</button>${ro?'':'<button class="btn primary" type="button" id="d-save">저장</button>'}</footer>`;
+    <footer>${delButtons(r)}<button class="btn" type="button" id="d-cancel">${ro?'닫기':'취소'}</button>${ro?'':'<button class="btn primary" type="button" id="d-save">저장</button>'}</footer>`;
   drawer.classList.add('on'); scrim.classList.add('on');
   $('d-close').onclick=closeDrawer; $('d-cancel').onclick=closeDrawer;
   if($('d-save')) $('d-save').onclick=()=>saveDrawer(r);
   if($('d-del')) $('d-del').onclick=()=>deleteItem(r);
+  if($('d-req')) $('d-req').onclick=()=>requestDelete(r);
+  if($('d-unreq')) $('d-unreq').onclick=()=>cancelDelete(r, me.role==='admin'?'반려':'요청 취소');
   if($('d-addchild')) $('d-addchild').onclick=()=>addItem(r.id);
   rerender();
   const { data, error } = await sb.from('item_history').select('changed_at,changed_by,changes').eq('item_id',id).order('changed_at',{ascending:false}).limit(50);
@@ -342,7 +378,10 @@ async function saveDrawer(r){
   }
   const st = patch.st!==undefined ? patch.st : r.st, pr = patch.prog!==undefined ? patch.prog : r.prog;
   if(isTask(r) && st==='Completed' && (pr==null||pr<1)){ patch.prog=1; changes.push('progress: 완료 처리로 100% 자동 반영'); }
-  if(!changes.length){ toast('바뀐 내용이 없습니다.'); return; }
+  const pSel=$('f-parent'); const newParent = pSel && !pSel.disabled ? pSel.value : r.parent;
+  const moving = !!newParent && newParent!==r.parent;
+  if(!changes.length && !moving){ toast('바뀐 내용이 없습니다.'); return; }
+  if(!changes.length && moving){ if(await moveItem(r,newParent)) openDrawer(r.id); return; }
   patch.updated_by = me.name; patch.updated_at = new Date().toISOString();
   $('d-save').disabled = true;
   const { data, error } = await sb.from('items').update(patch).eq('id',r.id).eq('updated_at',r.updated_at).select();
@@ -352,6 +391,7 @@ async function saveDrawer(r){
   }
   Object.assign(r, norm(data[0]));
   await sb.from('item_history').insert({item_id:r.id, changed_by:me.name, changes:changes.join(' / ')});
+  if(moving) await moveItem(r,newParent);
   toast(`${changes.length}개 항목을 저장했습니다.`);
   openDrawer(r.id);
 }
@@ -376,16 +416,99 @@ async function addItem(parentId){
   toast(`${id} 업무를 추가했습니다. 내용을 입력하고 저장하세요.`);
   openDrawer(id);
 }
-async function deleteItem(r){
-  if(kids(r.id).length){ toast('하위 업무가 있는 항목은 하위 업무를 먼저 삭제해야 합니다.'); return; }
-  const btn=$('d-del');
-  if(btn.dataset.confirm!=='1'){ btn.dataset.confirm='1'; btn.textContent='한 번 더 누르면 삭제됩니다'; return; }
-  const { error } = await sb.from('items').delete().eq('id',r.id);
-  if(error){ toast('삭제하지 못했습니다: '+error.message); return; }
-  await sb.from('item_history').insert({item_id:r.id, changed_by:me.name, changes:`업무 삭제: ${r.cat} / ${r.task||''}`});
-  items = items.filter(x=>x.id!==r.id); index();
-  toast(`${r.id}를 삭제했습니다.`); closeDrawer();
+// ---- 상위 항목 이동
+function parentOptions(r){
+  const sub = new Set([r.id, ...desc(r.id).map(x=>x.id)]);
+  const hasKids = desc(r.id).length > 0;
+  const opts = items.filter(x => x.sheet===r.sheet && !sub.has(x.id) && (x.lvl==='L1' || (!hasKids && (x.lvl==='T'||x.lvl==='P'))));
+  return opts.map(x => `<option value="${x.id}" ${x.id===r.parent?'selected':''}>${x.lvl==='L1'?'■ ':'　└ '}${esc(x.num)} ${esc(x.cat||'')}</option>`).join('');
 }
+async function moveItem(r, newParentId){
+  const np = byId[newParentId]; if(!np) return false;
+  const kidsAll = desc(r.id);
+  if(np.lvl!=='L1' && kidsAll.length){ toast('하위 업무가 있는 항목은 카테고리 바로 아래로만 옮길 수 있습니다.'); return false; }
+  const old = byId[r.parent];
+  const subIds = new Set([r.id, ...kidsAll.map(x=>x.id)]);
+  const sib = kids(np.id).filter(x=>!subIds.has(x.id));
+  const last = sib.length ? Math.max(...sib.map(x=>parseInt(String(x.num).split('.').pop(),10)||0)) : 0;
+  const num = `${np.num}.${last+1}`;
+  const lvl = np.lvl==='L1' ? (kidsAll.length?'P':'T') : 'C';
+  const block = [np, ...desc(np.id)].filter(x=>!subIds.has(x.id));
+  const tail = block.reduce((a,b)=>b.sort_order>a.sort_order?b:a);
+  const next = items.filter(x=>!subIds.has(x.id) && x.sort_order>tail.sort_order).sort((a,b)=>a.sort_order-b.sort_order)[0];
+  const hi = next ? next.sort_order : tail.sort_order + kidsAll.length + 2;
+  const step = (hi - tail.sort_order) / (kidsAll.length + 2);
+  const stamp = {updated_by:me.name, updated_at:new Date().toISOString()};
+  const ups = [{id:r.id, patch:{parent:np.id, lvl, num, sort_order:tail.sort_order+step, ...stamp}}];
+  kidsAll.forEach((k,i)=>ups.push({id:k.id, patch:{num:`${num}.${i+1}`, sort_order:tail.sort_order+step*(i+2), ...stamp}}));
+  if(np.lvl==='T') ups.push({id:np.id, patch:{lvl:'P', ...stamp}});
+  if(old && old.lvl==='P' && kids(old.id).filter(x=>x.id!==r.id).length===0) ups.push({id:old.id, patch:{lvl:'T', ...stamp}});
+  for(const u of ups){ const { error } = await sb.from('items').update(u.patch).eq('id',u.id); if(error){ toast('이동하지 못했습니다: '+error.message); await loadItems(); return false; } }
+  await sb.from('item_history').insert({item_id:r.id, changed_by:me.name, changes:`상위 항목 이동: ${old?old.num+' '+old.cat:'–'} → ${np.num} ${np.cat} (새 번호 ${num})`});
+  await loadItems();
+  toast(`${np.cat} 아래로 옮겼습니다.`);
+  return true;
+}
+
+// ---- 카테고리 추가
+async function addCategory(sheet){
+  const g = items.filter(r=>r.sheet===sheet && r.lvl==='L1');
+  const maxNum = g.length ? Math.max(...g.map(x=>parseInt(x.num,10)||0)) : 0;
+  const ids = items.filter(r=>r.id.startsWith(sheet+'-G')).map(r=>parseInt(r.id.slice(sheet.length+2),10)).filter(n=>!isNaN(n));
+  const id = `${sheet}-G${(ids.length?Math.max(...ids):0)+1}`;
+  const inSheet = items.filter(r=>r.sheet===sheet);
+  const tail = inSheet.length ? inSheet.reduce((a,b)=>b.sort_order>a.sort_order?b:a) : null;
+  const next = tail ? items.filter(x=>x.sort_order>tail.sort_order).sort((a,b)=>a.sort_order-b.sort_order)[0] : null;
+  const sort_order = !tail ? 1 : next ? (tail.sort_order+next.sort_order)/2 : tail.sort_order+10;
+  const row = {id, sheet, num:String(maxNum+1), lvl:'L1', parent:null, cat:'새 카테고리', w:0, sort_order, updated_by:me.name, updated_at:new Date().toISOString()};
+  const { data, error } = await sb.from('items').insert(row).select();
+  if(error){ toast('카테고리를 추가하지 못했습니다: '+error.message); return; }
+  await sb.from('item_history').insert({item_id:id, changed_by:me.name, changes:'카테고리 추가'});
+  items.push(norm(data[0])); index();
+  toast('카테고리를 추가했습니다. 이름을 입력하고 저장하세요.');
+  openDrawer(id);
+}
+
+// ---- 삭제: 관리자는 바로 삭제/승인, 팀원은 삭제 요청 → 관리자 승인
+function delButtons(r){
+  if(!canEdit()) return '';
+  if(me.role==='admin'){
+    return r.delete_requested_at
+      ? '<button class="btn danger" type="button" id="d-del" style="margin-right:4px">삭제 승인</button><button class="btn" type="button" id="d-unreq" style="margin-right:auto">반려</button>'
+      : '<button class="btn danger" type="button" id="d-del" style="margin-right:auto">삭제</button>';
+  }
+  return r.delete_requested_at
+    ? '<button class="btn" type="button" id="d-unreq" style="margin-right:auto">삭제 요청 취소</button>'
+    : '<button class="btn danger" type="button" id="d-req" style="margin-right:auto">삭제 요청</button>';
+}
+async function requestDelete(r){
+  const btn=$('d-req'); const n=desc(r.id).length;
+  if(btn.dataset.confirm!=='1'){ btn.dataset.confirm='1'; btn.textContent = n?`하위 ${n}건 포함 · 한 번 더 누르면 요청`:'한 번 더 누르면 삭제 요청'; return; }
+  const { error } = await sb.from('items').update({delete_requested_by:me.name, delete_requested_at:new Date().toISOString(), updated_by:me.name, updated_at:new Date().toISOString()}).eq('id',r.id);
+  if(error){ toast('삭제 요청을 보내지 못했습니다: '+error.message); return; }
+  await sb.from('item_history').insert({item_id:r.id, changed_by:me.name, changes:'삭제 요청'});
+  await loadItems(); toast('삭제 요청을 보냈습니다. 관리자가 승인하면 삭제됩니다.'); openDrawer(r.id);
+}
+async function cancelDelete(r, label){
+  const { error } = await sb.from('items').update({delete_requested_by:null, delete_requested_at:null, updated_by:me.name, updated_at:new Date().toISOString()}).eq('id',r.id);
+  if(error){ toast('처리하지 못했습니다: '+error.message); return; }
+  await sb.from('item_history').insert({item_id:r.id, changed_by:me.name, changes:`삭제 ${label}`});
+  await loadItems(); toast(`삭제 ${label} 처리했습니다.`); openDrawer(r.id);
+}
+async function deleteItem(r){
+  if(me.role!=='admin'){ toast('삭제는 관리자만 할 수 있습니다. 삭제 요청을 이용하세요.'); return; }
+  const sub = desc(r.id); const btn=$('d-del');
+  if(btn.dataset.confirm!=='1'){ btn.dataset.confirm='1'; btn.textContent = sub.length?`하위 ${sub.length}건까지 함께 삭제 · 한 번 더 누르세요`:'한 번 더 누르면 삭제됩니다'; return; }
+  const old = byId[r.parent];
+  for(const x of [...sub].reverse().concat([r])){
+    const { error } = await sb.from('items').delete().eq('id',x.id);
+    if(error){ toast('삭제하지 못했습니다: '+error.message); await loadItems(); rerender(); return; }
+    await sb.from('item_history').insert({item_id:x.id, changed_by:me.name, changes:`삭제${r.delete_requested_by?` (요청: ${r.delete_requested_by})`:''}: ${x.cat||''} / ${x.task||''}`});
+  }
+  if(old && old.lvl==='P' && kids(old.id).filter(x=>x.id!==r.id).length===0) await sb.from('items').update({lvl:'T', updated_by:me.name, updated_at:new Date().toISOString()}).eq('id',old.id);
+  await loadItems(); toast(`${r.lvl==='L1'?'카테고리':r.id}를 삭제했습니다.`); closeDrawer();
+}
+
 scrim.addEventListener('click',closeDrawer);
 document.addEventListener('keydown',e=>{ if(e.key==='Escape'&&drawer.classList.contains('on')) closeDrawer(); });
 
@@ -402,6 +525,7 @@ function rerender(){
 window.addEventListener('hashchange',()=>{ if(location.hash.includes('access_token')) return; rerender(); });
 document.querySelector('main').addEventListener('click',e=>{
   const add=e.target.closest('[data-add]'); if(add){ e.stopPropagation(); addItem(add.dataset.add); return; }
+  const ed=e.target.closest('[data-edit]'); if(ed){ e.stopPropagation(); openDrawer(ed.dataset.edit); return; }
   const go=e.target.closest('[data-go]');
   if(go){ const t=go.dataset.go; if(t.startsWith('chk:')){ for(const k of ['wbs','req']) Object.assign(ui[k],{q:'',pic:'',st:'',brand:'',chk:t.slice(4),mine:false}); location.hash='wbs'; rerender(); } else location.hash=t; return; }
   const g=e.target.closest('tr.g1');

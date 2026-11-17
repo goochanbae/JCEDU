@@ -38,6 +38,8 @@ create table if not exists public.items (
   due_date    date,
   done_date   date,
   feedback    text,
+  delete_requested_by text,                  -- 삭제 요청자 (관리자 승인 대기)
+  delete_requested_at timestamptz,
   sort_order  double precision not null,
   updated_at  timestamptz not null default now(),
   updated_by  text

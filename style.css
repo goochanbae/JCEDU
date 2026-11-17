@@ -169,3 +169,9 @@ tr.lvl-C td.t-name::before{content:"└ ";color:var(--muted)}
 .sync{font-size:11px;color:var(--muted)}
 .sync.live::before{content:"●";color:var(--ok);margin-right:4px}
 .hidden{display:none !important}
+th.dragcol{cursor:grab;user-select:none}
+th.dragcol:hover{color:var(--accent)}
+th.dragcol.dragging{opacity:.4}
+th.dragcol.drop-l{box-shadow:inset 3px 0 0 var(--accent)}
+th.dragcol.drop-r{box-shadow:inset -3px 0 0 var(--accent)}
+.linkbtn{background:none;border:0;padding:0;color:var(--accent);text-decoration:underline;font-size:12px}
