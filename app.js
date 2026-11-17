@@ -17,7 +17,7 @@ const LABELS = {cat:'Category',task:'Task',output:'Output',link:'산출물 링�
 const DAY = 864e5;
 const today = (() => { const d = new Date(); d.setHours(0,0,0,0); return d; })();
 
-let items = [], byId = {}, PEOPLE = ['전원'], MEMBERS = [], me = null, selId = null;
+let items = [], byId = {}, PEOPLE = ['전원'], STAFF = [], MEMBERS = [], me = null, selId = null;
 const ui = {
   wbs:{q:'',pic:'',st:'',brand:'',chk:'',mine:false,collapsed:new Set()},
   req:{q:'',pic:'',st:'',brand:'',chk:'',mine:false,collapsed:new Set()},
@@ -99,6 +99,7 @@ $('loginForm').addEventListener('submit', async e => {
 });
 $('deniedLogout').addEventListener('click', ()=>sb.auth.signOut());
 $('logoutBtn').addEventListener('click', ()=>sb.auth.signOut());
+$('staffBtn').addEventListener('click', ()=>openStaff());
 
 async function enter(session){
   const email = session.user.email;
@@ -106,7 +107,8 @@ async function enter(session){
   if(error){ showOnly('deniedView'); $('deniedMsg').textContent='팀원 정보를 불러오지 못했습니다: '+error.message; return; }
   me = (mem||[]).find(m => m.email.toLowerCase()===email.toLowerCase());
   if(!me){ showOnly('deniedView'); $('deniedMsg').textContent=`${email}은(는) 팀원 목록에 등록되어 있지 않습니다. 관리자에게 등록을 요청하세요.`; return; }
-  MEMBERS = mem.map(m=>m.name);
+  MEMBERS = mem;
+  await loadStaff();
   $('meName').textContent = me.name; $('meRole').textContent = me.role==='admin'?'관리자':me.role==='viewer'?'보기 전용':'';
   ui.wbs.mine = false;
   showOnly('appView');
@@ -121,11 +123,15 @@ async function loadItems(){
   $('nW').textContent = items.filter(r=>r.sheet==='WBS'&&r.lvl!=='L1').length;
   $('nR').textContent = items.filter(r=>r.sheet==='REQ'&&r.lvl!=='L1').length;
 }
-// 담당자 목록 = 로그인 계정(members) + 업무에 적힌 PIC·Backup 이름. '전원'은 맨 뒤.
+// 담당자 목록 = DB staff 테이블의 활성 담당자 (관리자가 '담당자 관리'에서 편집). '전원'은 맨 뒤.
+async function loadStaff(){
+  const { data, error } = await sb.from('staff').select('*').order('sort_order');
+  if(error){ toast('담당자 목록을 불러오지 못했습니다: '+error.message); STAFF=[]; } else STAFF = data;
+  refreshPeople();
+}
 function refreshPeople(){
-  const names = new Set(MEMBERS);
-  for(const r of items) for(const n of [r.pic, r.bak]) if(n && n!=='전원') names.add(n);
-  PEOPLE = [...[...names].sort((a,b)=>a.localeCompare(b,'ko')), '전원'];
+  PEOPLE = [...STAFF.filter(x=>x.active).map(x=>x.name), '전원'];
+  const hb = $('staffBtn'); if(hb) hb.classList.toggle('hidden', !(me && me.role==='admin'));
 }
 function norm(r){ for(const k of ['w','prog','kpi_target','kpi_actual','sort_order']) if(r[k]!=null) r[k]=Number(r[k]); return r; }
 function subscribe(){
@@ -146,7 +152,8 @@ function renderDashboard(){
   const due = all.filter(r=>{const e=pd(r.end_date); return e&&e>=w0&&e<=w1;}).sort((a,b)=>pd(a.end_date)-pd(b.end_date));
   const tile=(k,v,s,cls,go)=>`<button class="tile ${cls||''}" type="button" data-go="${go}"><span class="k">${k}</span><span class="v">${v}</span><span class="s">${s}</span></button>`;
   const prog=(lab,S,go)=>`<button class="tile" type="button" data-go="${go}"><span class="k">${lab} 진척</span><span class="v">${pct(S.actual)}</span><div class="pbar"><i style="width:${S.actual*100}%"></i><b style="left:calc(${Math.min(1,S.plan)*100}% - 1px)"></b></div><span class="s">오늘까지 계획 ${pct(S.plan)} · ${S.actual>=S.plan?'계획 이상':'계획보다 '+Math.round((S.plan-S.actual)*100)+'%p 늦음'}</span></button>`;
-  const ppl = [...PEOPLE,'(미지정)'].map(p=>{ const mine=work.filter(r=>p==='(미지정)'?!r.pic:r.pic===p); return {p, cnt:STATUS.map(s=>mine.filter(r=>r.st===s).length), none:mine.filter(r=>!STATUS.includes(r.st)).length, tot:mine.length, late:mine.filter(r=>check(r)==='지연').length, bak:work.filter(r=>p!=='(미지정)'&&r.bak===p).length}; }).filter(x=>x.tot||x.bak);
+  const OTHER='(목록에 없는 이름)';
+  const ppl = [...PEOPLE,OTHER,'(미지정)'].map(p=>{ const mine=work.filter(r=>p==='(미지정)'?!r.pic:p===OTHER?(r.pic&&!PEOPLE.includes(r.pic)):r.pic===p); return {p, cnt:STATUS.map(s=>mine.filter(r=>r.st===s).length), none:mine.filter(r=>!STATUS.includes(r.st)).length, tot:mine.length, late:mine.filter(r=>check(r)==='지연').length, bak:work.filter(r=>p!=='(미지정)'&&p!==OTHER&&r.bak===p).length}; }).filter(x=>x.tot||x.bak||PEOPLE.includes(x.p));
   const max = Math.max(...ppl.map(x=>x.tot),1);
   $('v-dashboard').innerHTML = `
   <div class="grid-tiles">${prog('WBS',W,'wbs')}${prog('대표님 REQ',R,'req')}
@@ -514,6 +521,83 @@ async function deleteItem(r){
   }
   if(old && old.lvl==='P' && kids(old.id).filter(x=>x.id!==r.id).length===0) await sb.from('items').update({lvl:'T', updated_by:me.name, updated_at:new Date().toISOString()}).eq('id',old.id);
   await loadItems(); toast(`${r.lvl==='L1'?'카테고리':r.id}를 삭제했습니다.`); closeDrawer();
+}
+
+// ---- 담당자 관리 (관리자 전용): staff 목록 + 로그인 계정(members) 연결
+const ROLE_KO = {'':'로그인 없음', viewer:'보기 전용', member:'팀원(편집)', admin:'관리자'};
+function openStaff(){
+  if(!me || me.role!=='admin') return;
+  selId = null;
+  const roleOf = email => { const m = MEMBERS.find(x=>email && x.email.toLowerCase()===email.toLowerCase()); return m ? m.role : ''; };
+  const used = n => items.filter(r=>r.pic===n||r.bak===n).length;
+  const rows = STAFF.map((x,i)=>staffRow(x.id, x.name, x.email||'', roleOf(x.email), x.active, used(x.name))).join('');
+  drawer.innerHTML = `
+    <header><div style="flex:1"><div class="id">관리자 전용</div><h3>담당자 관리</h3></div><button class="btn" type="button" id="st-close">닫기</button></header>
+    <div class="body">
+      <p class="hist" style="margin:0">PIC·Backup 선택 목록과 업무량 집계에 쓰이는 담당자 목록입니다. 로그인 이메일과 권한을 넣으면 그 사람이 사이트에 로그인할 수 있습니다. 이름을 바꾸면 기존 업무의 PIC·Backup도 함께 바뀝니다. 퇴사자는 삭제 대신 '사용'을 끄세요.</p>
+      <div id="st-list" style="display:flex;flex-direction:column;gap:10px">${rows}</div>
+      <button class="addbtn" type="button" id="st-add" style="align-self:flex-start;margin:0">+ 담당자 추가</button>
+    </div>
+    <footer><button class="btn" type="button" id="st-cancel">취소</button><button class="btn primary" type="button" id="st-save">저장</button></footer>`;
+  drawer.classList.add('on'); scrim.classList.add('on');
+  $('st-close').onclick=closeDrawer; $('st-cancel').onclick=closeDrawer;
+  $('st-add').onclick=()=>{ $('st-list').insertAdjacentHTML('beforeend', staffRow('', '', '', '', true, 0)); };
+  $('st-list').addEventListener('click', e=>{
+    const mv=e.target.closest('[data-mv]'); if(!mv) return;
+    const row=mv.closest('.staff-row'); const dir=mv.dataset.mv;
+    if(dir==='up' && row.previousElementSibling) row.parentNode.insertBefore(row,row.previousElementSibling);
+    if(dir==='down' && row.nextElementSibling) row.parentNode.insertBefore(row.nextElementSibling,row);
+  });
+  $('st-save').onclick=saveStaff;
+}
+function staffRow(id, name, email, role, active, used){
+  const self = me && email && email.toLowerCase()===me.email.toLowerCase();
+  return `<div class="staff-row fgrid" data-id="${id}" data-orig="${esc(name)}" data-origemail="${esc(email)}" style="border:1px solid var(--line);border-radius:8px;padding:10px">
+    <div class="field"><label>이름</label><input class="s-name" value="${esc(name)}" placeholder="예: 홍길동"></div>
+    <div class="field"><label>권한</label><select class="s-role" ${self?'disabled title="본인 권한은 바꿀 수 없습니다"':''}>${Object.entries(ROLE_KO).map(([k,v])=>`<option value="${k}" ${k===role?'selected':''}>${v}</option>`).join('')}</select></div>
+    <div class="field full"><label>로그인 이메일</label><input class="s-email" type="email" value="${esc(email)}" placeholder="비우면 로그인 없이 담당자로만 사용" ${self?'disabled':''}></div>
+    <div class="field" style="flex-direction:row;align-items:center;gap:6px"><input type="checkbox" class="s-active" ${active?'checked':''} ${self?'disabled':''}> <label style="margin:0">사용</label><span class="hist" style="margin-left:6px">업무 ${used}건</span></div>
+    <div class="field" style="flex-direction:row;justify-content:flex-end;gap:6px"><button class="btn" type="button" data-mv="up" aria-label="위로">▲</button><button class="btn" type="button" data-mv="down" aria-label="아래로">▼</button></div>
+  </div>`;
+}
+async function saveStaff(){
+  const rows=[...document.querySelectorAll('#st-list .staff-row')];
+  const list=rows.map((el,i)=>({id:el.dataset.id?Number(el.dataset.id):null, orig:el.dataset.orig, origEmail:el.dataset.origemail,
+    name:el.querySelector('.s-name').value.trim(), email:el.querySelector('.s-email').value.trim().toLowerCase(),
+    role:el.querySelector('.s-role').value, active:el.querySelector('.s-active').checked, sort_order:i+1})).filter(x=>x.name || x.id);
+  const names=list.map(x=>x.name);
+  if(list.some(x=>!x.name)){ toast('이름이 비어 있는 담당자가 있습니다.'); return; }
+  if(names.some(n=>n==='전원')){ toast("'전원'은 이름으로 쓸 수 없습니다."); return; }
+  if(new Set(names).size!==names.length){ toast('같은 이름이 두 번 있습니다.'); return; }
+  if(list.some(x=>x.role && !x.email)){ toast('권한을 주려면 로그인 이메일이 필요합니다.'); return; }
+  $('st-save').disabled=true;
+  const stamp={updated_by:me.name, updated_at:new Date().toISOString()};
+  const log=[];
+  try{
+    for(const x of list){
+      const row={name:x.name, email:x.email||null, active:x.active, sort_order:x.sort_order};
+      if(x.id){ const { error } = await sb.from('staff').update(row).eq('id',x.id); if(error) throw error; }
+      else { const { error } = await sb.from('staff').insert(row); if(error) throw error; log.push(`담당자 추가: ${x.name}`); }
+      if(x.id && x.orig && x.orig!==x.name){
+        for(const col of ['pic','bak']){ const { error } = await sb.from('items').update({[col]:x.name, ...stamp}).eq(col,x.orig); if(error) throw error; }
+        log.push(`이름 변경: ${x.orig} → ${x.name}`);
+      }
+      // 로그인 계정 동기화 (본인 계정은 건드리지 않음)
+      if(x.origEmail && x.origEmail.toLowerCase()===me.email.toLowerCase()){
+        if(x.orig!==x.name){ const { error } = await sb.from('members').update({name:x.name}).eq('email',me.email); if(error) throw error; me.name=x.name; $('meName').textContent=x.name; }
+        continue;
+      }
+      if(x.origEmail && x.origEmail!==x.email){ const { error } = await sb.from('members').delete().eq('email',x.origEmail); if(error) throw error; }
+      if(x.email && x.role && x.active){ const { error } = await sb.from('members').upsert({email:x.email, name:x.name, role:x.role}); if(error) throw error; }
+      else if(x.email){ const { error } = await sb.from('members').delete().eq('email',x.email); if(error) throw error; }
+    }
+    if(log.length) await sb.from('item_history').insert({item_id:'STAFF', changed_by:me.name, changes:log.join(' / ')});
+    const { data:mem } = await sb.from('members').select('email,name,role').order('name'); MEMBERS = mem||MEMBERS;
+    await loadStaff(); await loadItems();
+    toast('담당자 목록을 저장했습니다.'); closeDrawer();
+  }catch(e){
+    toast('저장하지 못했습니다: '+(e.message||e)); $('st-save').disabled=false;
+  }
 }
 
 scrim.addEventListener('click',closeDrawer);

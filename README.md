@@ -47,12 +47,12 @@ anon 키는 공개되어도 되는 키입니다. 데이터는 RLS 정책이 보�
 저장소 **Settings → Pages** → Source: `Deploy from a branch`, Branch: `main` / `/ (root)` → Save
 몇 분 뒤 `https://goochanbae.github.io/JCEDU/` 에서 열립니다.
 
-## 팀원 추가
-1. SQL Editor에서 등록
-   ```sql
-   insert into public.members (email, name, role) values ('이메일', '이름', 'member');
-   ```
-2. 로그인 방법 (둘 중 하나)
+## 담당자·팀원 관리
+관리자로 로그인하면 상단 **담당자 관리** 버튼이 보입니다.
+- 담당자 추가·이름 변경·순서 변경·사용 끄기 (이름을 바꾸면 기존 업무의 PIC·Backup도 함께 변경)
+- 로그인 이메일과 권한(보기 전용 / 팀원 / 관리자)을 넣으면 그 사람이 로그인할 수 있게 됩니다 (members 테이블 자동 반영)
+
+로그인 방법 (둘 중 하나)
    - **로그인 링크**: 로그인 화면에 이메일만 입력 → 메일로 받은 링크 클릭
      (Supabase 기본 메일은 시간당 발송 수가 적습니다. 여러 명이 한꺼번에 로그인하면 막힐 수 있습니다)
    - **비밀번호**: Supabase **Authentication → Users → Add user → Create new user**에서 이메일·비밀번호 입력, `Auto Confirm User` 체크 → 팀원에게 비밀번호 전달
@@ -66,6 +66,9 @@ anon 키는 공개되어도 되는 키입니다. 데이터는 RLS 정책이 보�
 ## DB 변경 이력
 기존 프로젝트에는 `supabase/migrations/` 의 파일을 번호 순서대로 SQL Editor에서 실행하세요. (새 프로젝트는 schema.sql 하나로 충분합니다)
 - 002_delete_requests.sql — 삭제 요청 컬럼
+- 003_staff.sql — 담당자(staff) 테이블, 관리자의 로그인 계정 관리 권한
+
+새 프로젝트: schema.sql → seed(초기 데이터) → migrations 002, 003 순서로 실행
 
 ## 파일 구성
 ```
