@@ -99,7 +99,7 @@ $('loginForm').addEventListener('submit', async e => {
 });
 $('deniedLogout').addEventListener('click', ()=>sb.auth.signOut());
 $('logoutBtn').addEventListener('click', ()=>sb.auth.signOut());
-$('staffBtn').addEventListener('click', ()=>openStaff());
+$('accountBtn').addEventListener('click', ()=>openAccount());
 
 async function enter(session){
   const email = session.user.email;
@@ -131,7 +131,7 @@ async function loadStaff(){
 }
 function refreshPeople(){
   PEOPLE = [...STAFF.filter(x=>x.active).map(x=>x.name), '전원'];
-  const hb = $('staffBtn'); if(hb) hb.classList.toggle('hidden', !(me && me.role==='admin'));
+  const at = $('adminTab'); if(at) at.classList.toggle('hidden', !(me && me.role==='admin'));
 }
 function norm(r){ for(const k of ['w','prog','kpi_target','kpi_actual','sort_order']) if(r[k]!=null) r[k]=Number(r[k]); return r; }
 function subscribe(){
@@ -600,18 +600,135 @@ async function saveStaff(){
   }
 }
 
+// ---------------- 관리자 페이지 (회원 관리) — 관리자만 접근
+async function renderAdmin(){
+  const el = $('v-admin');
+  if(!me || me.role!=='admin'){ el.innerHTML='<div class="empty">관리자만 볼 수 있는 페이지입니다.</div>'; return; }
+  const [{ data:mem }, { data:hist }] = await Promise.all([
+    sb.from('members').select('email,name,role').order('name'),
+    sb.from('item_history').select('item_id,changed_at,changed_by,changes').order('changed_at',{ascending:false}).limit(30)
+  ]);
+  MEMBERS = mem || MEMBERS;
+  const firstFree = (STAFF.find(s=>s.active && !s.email)||{}).name;
+  const staffOpts = () => STAFF.filter(s=>s.active).map(s=>`<option value="${esc(s.name)}" ${s.name===firstFree?'selected':''}>${esc(s.name)}${s.email?' (로그인 있음)':''}</option>`).join('') + `<option value="" ${firstFree?'':'selected'}>(새 담당자로 등록)</option>`;
+  const roleSel = (v, dis) => `<select class="m-role" ${dis?'disabled title="본인 권한은 바꿀 수 없습니다"':''}>${['viewer','member','admin'].map(k=>`<option value="${k}" ${k===v?'selected':''}>${ROLE_KO[k]}</option>`).join('')}</select>`;
+  const used = n => items.filter(r=>r.pic===n||r.bak===n).length;
+  el.innerHTML = `
+    <div class="cols" style="grid-template-columns:minmax(0,1.4fr) minmax(0,1fr)">
+      <div class="panel">
+        <h2 class="sec">회원 관리 <span style="font-weight:400;color:var(--muted);font-size:12px">· 사이트에 로그인할 수 있는 계정 ${MEMBERS.length}명</span></h2>
+        <div class="tablewrap" style="max-height:none"><table class="fixed" style="min-width:640px"><colgroup><col style="width:22%"><col><col style="width:18%"><col style="width:190px"></colgroup>
+          <thead><tr><th>이름</th><th>이메일</th><th>권한</th><th></th></tr></thead><tbody>
+          ${MEMBERS.map(m=>{ const self=m.email.toLowerCase()===me.email.toLowerCase(); return `<tr data-email="${esc(m.email)}">
+            <td><b>${esc(m.name)}</b>${self?' <span class="chip c-pl">나</span>':''}</td><td class="mono" style="white-space:normal">${esc(m.email)}</td>
+            <td>${roleSel(m.role, self)}</td>
+            <td class="nw">${self?'':`<button class="btn" type="button" data-act="save">권한 저장</button> <button class="btn" type="button" data-act="link" title="이 이메일로 로그인 링크를 보냅니다">링크</button> <button class="btn danger" type="button" data-act="remove">해제</button>`}</td></tr>`; }).join('')}
+          </tbody></table></div>
+        <h2 class="sec" style="margin-top:18px">회원 추가</h2>
+        <form id="m-add" class="fgrid" style="grid-template-columns:1fr 1.4fr 1fr auto;align-items:end">
+          <div class="field"><label for="m-name">담당자</label><select id="m-name">${staffOpts()}</select></div>
+          <div class="field"><label for="m-email">로그인 이메일</label><input id="m-email" type="email" required placeholder="name@example.com"></div>
+          <div class="field"><label for="m-role">권한</label><select id="m-role">${['member','viewer','admin'].map(k=>`<option value="${k}">${ROLE_KO[k]}</option>`).join('')}</select></div>
+          <button class="btn primary" type="submit">추가</button>
+          <div class="field full hidden" id="m-newname-wrap"><label for="m-newname">새 담당자 이름</label><input id="m-newname" placeholder="예: 홍길동"></div>
+        </form>
+        <p class="hist" style="margin:10px 0 0">추가한 뒤 '링크'를 누르면 그 이메일로 로그인 링크가 발송됩니다. 처음 로그인한 사람은 상단 '내 계정'에서 비밀번호를 정할 수 있습니다. '해제'는 로그인 권한만 없애며 담당자와 업무 기록은 그대로 남습니다.</p>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:16px">
+        <div class="panel">
+          <h2 class="sec">담당자 목록 <span style="font-weight:400;color:var(--muted);font-size:12px">· PIC·Backup 선택 목록</span></h2>
+          <div class="people">${STAFF.map(s=>`<div class="person" style="grid-template-columns:80px 1fr 60px"><span class="nm" style="${s.active?'':'color:var(--muted);text-decoration:line-through'}">${esc(s.name)}</span><span class="hist">${s.email?esc(s.email):'로그인 없음'}</span><span class="tot">${used(s.name)}건</span></div>`).join('')}</div>
+          <button class="btn" type="button" id="adm-staff" style="margin-top:12px">담당자 편집</button>
+        </div>
+        <div class="panel">
+          <h2 class="sec">최근 변경 이력</h2>
+          <div class="hist" style="max-height:360px;overflow:auto">${(hist||[]).map(h=>`<div>${new Date(h.changed_at).toLocaleString('ko-KR',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'})} · ${esc(h.changed_by)} · <span class="mono">${esc(h.item_id)}</span> · ${esc(h.changes)}</div>`).join('')||'<div>이력이 없습니다.</div>'}</div>
+        </div>
+      </div>
+    </div>`;
+  $('adm-staff').onclick = openStaff;
+  $('m-name').onchange = e => $('m-newname-wrap').classList.toggle('hidden', e.target.value!=='');
+  $('m-newname-wrap').classList.toggle('hidden', $('m-name').value!=='');
+  $('m-add').onsubmit = async e => {
+    e.preventDefault();
+    const email = $('m-email').value.trim().toLowerCase(), role = $('m-role').value;
+    const name = $('m-name').value || $('m-newname').value.trim();
+    if(!name){ toast('담당자를 고르거나 새 이름을 입력하세요.'); return; }
+    if(MEMBERS.some(m=>m.email.toLowerCase()===email)){ toast('이미 등록된 이메일입니다.'); return; }
+    const st = STAFF.find(s=>s.name===name);
+    const r1 = st ? await sb.from('staff').update({email, active:true}).eq('id',st.id)
+                  : await sb.from('staff').insert({name, email, active:true, sort_order:(STAFF.length?Math.max(...STAFF.map(s=>s.sort_order)):0)+1});
+    if(r1.error){ toast('담당자 저장 실패: '+r1.error.message); return; }
+    const { error } = await sb.from('members').insert({email, name, role});
+    if(error){ toast('회원 추가 실패: '+error.message); return; }
+    await sb.from('item_history').insert({item_id:'MEMBER', changed_by:me.name, changes:`회원 추가: ${name} (${email}, ${ROLE_KO[role]})`});
+    await loadStaff(); toast(`${name} 님을 추가했습니다. '링크'로 로그인 링크를 보내세요.`); renderAdmin();
+  };
+  el.querySelectorAll('tr[data-email] [data-act]').forEach(b => b.onclick = async () => {
+    const tr = b.closest('tr'), email = tr.dataset.email, m = MEMBERS.find(x=>x.email===email), act = b.dataset.act;
+    if(act==='save'){
+      const role = tr.querySelector('.m-role').value; if(role===m.role){ toast('바뀐 권한이 없습니다.'); return; }
+      const { error } = await sb.from('members').update({role}).eq('email',email);
+      if(error){ toast('저장 실패: '+error.message); return; }
+      await sb.from('item_history').insert({item_id:'MEMBER', changed_by:me.name, changes:`권한 변경: ${m.name} ${ROLE_KO[m.role]} → ${ROLE_KO[role]}`});
+      toast(`${m.name} 님 권한을 ${ROLE_KO[role]}(으)로 바꿨습니다.`); renderAdmin();
+    } else if(act==='link'){
+      b.disabled = true;
+      const { error } = await sb.auth.signInWithOtp({ email, options:{ emailRedirectTo: location.origin + location.pathname, shouldCreateUser:true } });
+      b.disabled = false;
+      toast(error ? (/rate|limit/i.test(error.message)?'메일 발송 한도를 넘었습니다. 잠시 후 다시 시도하세요.':'발송 실패: '+error.message) : `${email}로 로그인 링크를 보냈습니다.`);
+    } else if(act==='remove'){
+      if(b.dataset.confirm!=='1'){ b.dataset.confirm='1'; b.textContent='한 번 더'; return; }
+      const { error } = await sb.from('members').delete().eq('email',email);
+      if(error){ toast('해제 실패: '+error.message); return; }
+      await sb.from('item_history').insert({item_id:'MEMBER', changed_by:me.name, changes:`로그인 해제: ${m.name} (${email})`});
+      toast(`${m.name} 님의 로그인 권한을 해제했습니다.`); renderAdmin();
+    }
+  });
+}
+
+// ---------------- 내 계정 (비밀번호 설정) — 모든 사용자
+function openAccount(){
+  selId = null;
+  drawer.innerHTML = `
+    <header><div style="flex:1"><div class="id">${esc(me.email)} · ${ROLE_KO[me.role]||me.role}</div><h3>내 계정</h3></div><button class="btn" type="button" id="ac-close">닫기</button></header>
+    <form class="body" id="ac-form">
+      <div class="subhead">비밀번호 설정</div>
+      <p class="hist" style="margin:0">비밀번호를 정해두면 다음부터 메일 링크 없이 이메일과 비밀번호로 로그인할 수 있습니다. 8자 이상으로 정하세요.</p>
+      <div class="field"><label for="ac-pw">새 비밀번호</label><input id="ac-pw" type="password" autocomplete="new-password" minlength="8" required></div>
+      <div class="field"><label for="ac-pw2">새 비밀번호 확인</label><input id="ac-pw2" type="password" autocomplete="new-password" minlength="8" required></div>
+      <button class="btn primary" type="submit" id="ac-save" style="align-self:flex-start">비밀번호 저장</button>
+      <div class="hist" id="ac-msg"></div>
+    </form>`;
+  drawer.classList.add('on'); scrim.classList.add('on');
+  $('ac-close').onclick = closeDrawer;
+  $('ac-form').onsubmit = async e => {
+    e.preventDefault();
+    const a=$('ac-pw').value, b=$('ac-pw2').value;
+    if(a.length<8){ $('ac-msg').textContent='8자 이상으로 입력하세요.'; return; }
+    if(a!==b){ $('ac-msg').textContent='두 비밀번호가 다릅니다.'; return; }
+    $('ac-save').disabled=true;
+    const { error } = await sb.auth.updateUser({ password:a });
+    $('ac-save').disabled=false;
+    if(error){ $('ac-msg').textContent='저장하지 못했습니다: '+error.message; return; }
+    $('ac-pw').value=''; $('ac-pw2').value='';
+    toast('비밀번호를 저장했습니다. 다음부터 이메일과 비밀번호로 로그인할 수 있습니다.'); closeDrawer();
+  };
+}
+
 scrim.addEventListener('click',closeDrawer);
 document.addEventListener('keydown',e=>{ if(e.key==='Escape'&&drawer.classList.contains('on')) closeDrawer(); });
 
 // ---------------- routing
-const VIEWS=['dashboard','wbs','req','weekly','gantt'];
+const VIEWS=['dashboard','wbs','req','weekly','gantt','admin'];
 const current=()=>{ const h=location.hash.slice(1); return VIEWS.includes(h)?h:'dashboard'; };
 function rerender(){
   if(!me) return;
   const v=current();
   document.querySelectorAll('#tabs a').forEach(a=>a.classList.toggle('on',a.dataset.v===v));
   document.querySelectorAll('.view').forEach(s=>s.classList.toggle('on',s.id==='v-'+v));
-  if(v==='dashboard') renderDashboard(); else if(v==='wbs') renderTable('WBS'); else if(v==='req') renderTable('REQ'); else if(v==='weekly') renderWeekly(); else renderGantt();
+  if(v==='admin' && me.role!=='admin'){ location.hash='dashboard'; return; }
+  if(v==='admin') renderAdmin(); else if(v==='dashboard') renderDashboard(); else if(v==='wbs') renderTable('WBS'); else if(v==='req') renderTable('REQ'); else if(v==='weekly') renderWeekly(); else renderGantt();
 }
 window.addEventListener('hashchange',()=>{ if(location.hash.includes('access_token')) return; rerender(); });
 document.querySelector('main').addEventListener('click',e=>{

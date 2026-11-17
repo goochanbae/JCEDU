@@ -42,7 +42,7 @@
     <div class="spacer"></div>
     <span class="sync" id="syncState">연결 중</span>
     <span class="who"><b id="meName"></b><span id="meRole"></span></span>
-    <button class="btn hidden" id="staffBtn" type="button">담당자 관리</button>
+    <button class="btn" id="accountBtn" type="button">내 계정</button>
     <button class="btn" id="logoutBtn" type="button">로그아웃</button>
     <button class="btn primary" id="xlsxBtn" type="button">엑셀 다운로드</button>
   </div>
@@ -52,6 +52,7 @@
     <a href="#req" data-v="req">대표님 REQ<span class="n" id="nR"></span></a>
     <a href="#weekly" data-v="weekly">주간 보고</a>
     <a href="#gantt" data-v="gantt">간트</a>
+    <a href="#admin" data-v="admin" id="adminTab" class="hidden">관리자</a>
   </nav>
 </header>
 <main>
@@ -60,6 +61,7 @@
   <section class="view" id="v-req"></section>
   <section class="view" id="v-weekly"></section>
   <section class="view" id="v-gantt"></section>
+  <section class="view" id="v-admin"></section>
 </main>
 </div>
 <div class="scrim" id="scrim"></div>
