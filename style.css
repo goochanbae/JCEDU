@@ -3,9 +3,9 @@
   --bg:#f6f4f8; --surface:#ffffff; --ink:#1f1a24; --muted:#6c6475; --line:#e3dde9;
   --accent:#64005f; --accent-2:#a871e3; --accent-soft:#f1e8fb;
   --ok:#2e7d4f; --ok-soft:#e3f3e8; --warn:#b35c00; --warn-soft:#fff0dc; --bad:#c0262d; --bad-soft:#fde4e4; --info:#1f5fae; --info-soft:#e3eefb; --hold:#7a6f85; --hold-soft:#eeebf1;
-  --font-display:"IBM Plex Sans KR","Apple SD Gothic Neo","Malgun Gothic",sans-serif;
-  --font-body:"IBM Plex Sans KR","Apple SD Gothic Neo","Malgun Gothic",sans-serif;
-  --font-mono:"IBM Plex Mono",ui-monospace,Menlo,monospace;
+  --font-display:"Pretendard Variable",Pretendard,-apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Malgun Gothic",sans-serif;
+  --font-body:var(--font-display);
+  --font-mono:var(--font-display); /* 숫자·ID도 Pretendard (tabular-nums로 자릿수 정렬) */
   color-scheme:light;
 }
 @media (prefers-color-scheme: dark){
@@ -179,3 +179,4 @@ table.fixed{table-layout:fixed;min-width:900px}
 table.fixed td,table.fixed th{overflow-wrap:anywhere}
 table.fixed td.wrap{white-space:normal;color:var(--muted);font-size:12px}
 .person .stack{min-width:4px}
+

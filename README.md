@@ -20,7 +20,13 @@ GitHub Pages에서 화면을 제공하고, 데이터는 Supabase(DB·로그인)�
 | member | O | O | 삭제 요청만 (관리자 승인 후 삭제) |
 | viewer | O | X | X |
 
-`members` 테이블에 등록된 이메일만 로그인 후 데이터를 볼 수 있습니다 (DB의 RLS 정책으로 강제).
+`members` 테이블에 등록된(=관리자가 승인한) 계정만 로그인 후 데이터를 볼 수 있습니다 (DB의 RLS 정책으로 강제).
+
+## 가입 · 로그인
+- 로그인은 **이메일 + 비밀번호**만 사용합니다. 메일 링크 로그인은 없습니다.
+- 새 팀원은 로그인 화면의 **회원가입**에서 이름·이메일·비밀번호를 입력 → 관리자가 **관리자 탭 → 가입 요청**에서 담당자 연결·권한을 정해 승인하면 사용할 수 있습니다.
+- 승인 전에는 '가입 승인 대기 중' 화면만 보이고 데이터는 DB에서 차단됩니다.
+- 비밀번호를 잊으면: 관리자가 '계정 삭제' → 다시 가입 → 승인 (담당자·업무 기록은 유지)
 
 ## 설치 (최초 1회)
 
@@ -28,10 +34,10 @@ GitHub Pages에서 화면을 제공하고, 데이터는 Supabase(DB·로그인)�
 1. supabase.com 에서 새 프로젝트 생성 (Region: Northeast Asia (Seoul))
 2. **SQL Editor**에서 `supabase/schema.sql` 실행
 3. **SQL Editor**에서 초기 데이터 `seed.sql` 실행 — 저장소에 없는 별도 파일입니다. 팀원 이메일을 채운 뒤 실행하세요.
-4. **Authentication → URL Configuration**
-   - Site URL: `https://goochanbae.github.io/JCEDU/`
-   - Redirect URLs: `https://goochanbae.github.io/JCEDU/` 추가
-5. **Project Settings → API**에서 Project URL과 `anon` `public` 키를 복사
+4. **Authentication → Sign In / Providers → Email**에서 **Confirm email 끄기** → Save
+   (가입 시 확인 메일을 보내지 않고, 관리자 승인으로 대신합니다)
+5. **Authentication → URL Configuration** — Site URL: `https://goochanbae.github.io/JCEDU/`
+6. **Project Settings → API**에서 Project URL과 `anon` `public` 키를 복사
 
 ### 2. 코드 설정
 `config.js`에 위에서 복사한 값을 넣습니다.
@@ -49,20 +55,16 @@ anon 키는 공개되어도 되는 키입니다. 데이터는 RLS 정책이 보�
 
 ## 관리자 페이지 (회원 관리)
 관리자로 로그인하면 **관리자** 탭이 보입니다. (다른 권한에는 탭이 보이지 않고 주소로 들어와도 업무 현황으로 돌아갑니다. 데이터 수정 권한은 DB의 RLS가 막습니다)
-- 회원 추가(담당자 + 로그인 이메일 + 권한), 권한 변경, 로그인 링크 발송, 로그인 해제
+- 가입 요청 승인(담당자 연결 + 권한) · 거절
+- 회원 권한 변경, 계정 삭제 (담당자·업무 기록은 유지)
 - 담당자 목록 편집, 최근 변경 이력
 
 ## 내 계정 · 비밀번호
-모든 사용자는 상단 **내 계정**에서 비밀번호(8자 이상)를 정할 수 있습니다. 처음에는 로그인 링크로 들어온 뒤 비밀번호를 정하세요.
+모든 사용자는 상단 **내 계정**에서 비밀번호(8자 이상)를 바꿀 수 있습니다.
 
 ## 담당자 편집
 - 담당자 추가·이름 변경·순서 변경·사용 끄기 (이름을 바꾸면 기존 업무의 PIC·Backup도 함께 변경)
-- 로그인 이메일과 권한(보기 전용 / 팀원 / 관리자)을 넣으면 그 사람이 로그인할 수 있게 됩니다 (members 테이블 자동 반영)
-
-로그인 방법 (둘 중 하나)
-   - **로그인 링크**: 로그인 화면에 이메일만 입력 → 메일로 받은 링크 클릭
-     (Supabase 기본 메일은 시간당 발송 수가 적습니다. 여러 명이 한꺼번에 로그인하면 막힐 수 있습니다)
-   - **비밀번호**: Supabase **Authentication → Users → Add user → Create new user**에서 이메일·비밀번호 입력, `Auto Confirm User` 체크 → 팀원에게 비밀번호 전달
+- 로그인 계정 연결은 가입 승인에서만 합니다 (담당자 편집 화면에서는 보기만 가능)
 
 ## 화면 사용 팁
 - **열 순서 바꾸기**: WBS·대표님 REQ 표에서 '업무' 뒤의 열 제목을 끌어서 좌우로 옮길 수 있습니다. 순서는 각자 브라우저에 저장되며 '열 순서 초기화'로 되돌립니다.
@@ -74,8 +76,9 @@ anon 키는 공개되어도 되는 키입니다. 데이터는 RLS 정책이 보�
 기존 프로젝트에는 `supabase/migrations/` 의 파일을 번호 순서대로 SQL Editor에서 실행하세요. (새 프로젝트는 schema.sql 하나로 충분합니다)
 - 002_delete_requests.sql — 삭제 요청 컬럼
 - 003_staff.sql — 담당자(staff) 테이블, 관리자의 로그인 계정 관리 권한
+- 004_signup_approval.sql — 회원가입 승인 요청(signup_requests), 거절·계정 삭제 함수
 
-새 프로젝트: schema.sql → seed(초기 데이터) → migrations 002, 003 순서로 실행
+새 프로젝트: schema.sql → seed(초기 데이터) → migrations 002, 003, 004 순서로 실행
 
 ## 파일 구성
 ```
