@@ -141,9 +141,11 @@ async function enter(session){
   showOnly('appView');
   if(me.role==='admin') loadRequests();
   await loadItems();
-  await Promise.all([loadChecks(), loadCommentCounts()]);
+  await Promise.all([loadChecks(), loadCommentTimes()]);
+  seenLoad();
   subscribe();
-  loadMissed();
+  await loadMissed();
+  rerender();
   rerender();
 }
 async function loadItems(){
@@ -177,6 +179,8 @@ function subscribe(){
     else { const n = norm(p.new); const i = items.findIndex(r=>r.id===n.id); if(i>=0) items[i]=n; else items.push(n); }
     index(); refreshPeople();
     if(p.eventType==='INSERT') onItemInsert(byId[p.new.id]);
+    if(selId && p.new && p.new.id===selId) markSeen(selId, true);
+    newsTabs();
     if(selId && p.new && p.new.id===selId && p.new.updated_by!==me.name) toast(`${p.new.updated_by||'다른 팀원'}님이 이 업무를 방금 수정했습니다.`);
     if(!$('drawer').classList.contains('on')) rerender();
   }).on('postgres_changes', {event:'INSERT', schema:'public', table:'item_comments'}, p => onCommentInsert(p.new))
@@ -234,6 +238,7 @@ function rowVisible(r,f){
   if(f.mine && r.pic!==me.name && r.bak!==me.name) return false;
   if(f.st && r.st!==f.st) return false;
   if(f.brand && r.brand!==f.brand) return false;
+  if(f.news && !newsOf(r)) return false;
   if(f.chk==='삭제 대기'){ if(!r.delete_requested_at) return false; }
   else if(f.chk){ const c=check(r); if(f.chk==='⚠' ? !c.startsWith('⚠') : c!==f.chk) return false; }
   if(f.q){ const q=f.q.toLowerCase(); if(![r.id,r.cat,r.task,r.output,r.note,r.pic].some(x=>x&&String(x).toLowerCase().includes(q))) return false; }
@@ -242,7 +247,8 @@ function rowVisible(r,f){
 function renderTable(sheet){
   const key = sheet==='WBS'?'wbs':'req', f = ui[key];
   const groups = items.filter(r=>r.sheet===sheet&&r.lvl==='L1');
-  const filtering = f.q||f.pic||f.st||f.brand||f.chk||f.mine;
+  const filtering = f.q||f.pic||f.st||f.brand||f.chk||f.mine||f.news;
+  const newsAll = items.filter(r=>r.sheet===sheet && r.lvl!=='L1' && newsOf(r));
   let shown=0,total=0,body='';
   for(const g of groups){
     const members = desc(g.id);
@@ -252,13 +258,14 @@ function renderTable(sheet){
     if(filtering && !vis.length && !gHit) continue;
     shown += vis.length;
     const a = groupAgg(g), col = f.collapsed.has(g.id) && !filtering;
-    body += `<tr class="g1" data-g="${g.id}"><td><span class="tw">${col?'▸':'▾'}</span>${esc(g.num)}</td><td></td><td>${esc(g.cat)}${delChip(g)} <span style="font-weight:400;color:var(--muted)">· ${a.n}건</span>${canEdit()?`<button class="addbtn" type="button" data-add="${g.id}">+ 업무 추가</button><button class="addbtn" type="button" data-edit="${g.id}">편집</button>`:''}</td>${colOrder.map(k=>`<td class="${MOVABLE[k].cls||''}">${MOVABLE[k].g?MOVABLE[k].g(a):''}</td>`).join('')}</tr>`;
+    const gNews = members.filter(r=>newsOf(r)).length;
+    body += `<tr class="g1" data-g="${g.id}"><td><span class="tw">${col?'▸':'▾'}</span>${esc(g.num)}</td><td></td><td>${esc(g.cat)}${delChip(g)}${gNews?` <span class="nb nb-upd">새 소식 ${gNews}</span>`:''} <span style="font-weight:400;color:var(--muted)">· ${a.n}건</span>${canEdit()?`<button class="addbtn" type="button" data-add="${g.id}">+ 업무 추가</button><button class="addbtn" type="button" data-edit="${g.id}">편집</button>`:''}</td>${colOrder.map(k=>`<td class="${MOVABLE[k].cls||''}">${MOVABLE[k].g?MOVABLE[k].g(a):''}</td>`).join('')}</tr>`;
     if(col) continue;
     for(const r of vis){
       const a2 = r.lvl==='P' ? groupAgg(r) : null;
       body += `<tr class="task lvl-${r.lvl}${r.id===selId?' sel':''}" data-id="${r.id}">
         <td class="mono">${r.id}</td><td class="mono" style="color:var(--muted)">${esc(r.num)}</td>
-        <td class="t-name"><span class="cat">${esc(r.cat||'')}${delChip(r)}</span><span class="tk">${esc(r.task||'')}</span></td>
+        <td class="t-name"><span class="cat">${esc(r.cat||'')}${delChip(r)}${newsChip(r)}</span><span class="tk">${esc(r.task||'')}</span></td>
         ${colOrder.map(k=>`<td class="${MOVABLE[k].cls||''}">${MOVABLE[k].cell(r,a2)}</td>`).join('')}</tr>`;
     }
   }
@@ -272,6 +279,8 @@ function renderTable(sheet){
       <select id="${key}-brand" aria-label="브랜드">${pick(BRANDS,f.brand,'브랜드 전체')}</select>
       <select id="${key}-chk" aria-label="일정 체크">${pick(['지연','임박','⚠','진행','예정','완료','삭제 대기'],f.chk,'일정 체크 전체')}</select>
       <label><input type="checkbox" id="${key}-mine" ${f.mine?'checked':''}> 내 업무만</label>
+      <label class="${newsAll.length?'news-on':''}"><input type="checkbox" id="${key}-news" ${f.news?'checked':''}> 새 소식만${newsAll.length?` (${newsAll.length})`:''}</label>
+      ${newsAll.length?`<button class="btn" type="button" id="${key}-seen">새 소식 모두 확인</button>`:''}
       <button class="btn" type="button" id="${key}-fold">${f.collapsed.size?'모두 펼치기':'모두 접기'}</button>
       <button class="btn" type="button" id="${key}-reset">필터 초기화</button>
       ${canEdit()?`<button class="btn" type="button" id="${key}-addcat">+ 카테고리 추가</button>`:''}
@@ -282,8 +291,10 @@ function renderTable(sheet){
   on(`${key}-q`,'input',e=>{f.q=e.target.value; renderTable(sheet); const i=$(`${key}-q`); i.focus(); i.setSelectionRange(i.value.length,i.value.length);});
   for(const k of ['pic','st','brand','chk']) on(`${key}-${k}`,'change',e=>{f[k]=e.target.value; renderTable(sheet);});
   on(`${key}-mine`,'change',e=>{f.mine=e.target.checked; renderTable(sheet);});
+  on(`${key}-news`,'change',e=>{f.news=e.target.checked; renderTable(sheet);});
+  on(`${key}-seen`,'click',()=>{ markSeenMany(newsAll); f.news=false; toast(`새 소식 ${newsAll.length}건을 확인 처리했어요.`); renderTable(sheet); });
   on(`${key}-fold`,'click',()=>{ if(f.collapsed.size) f.collapsed.clear(); else groups.forEach(g=>f.collapsed.add(g.id)); renderTable(sheet); });
-  on(`${key}-reset`,'click',()=>{ Object.assign(f,{q:'',pic:'',st:'',brand:'',chk:'',mine:false}); renderTable(sheet); });
+  on(`${key}-reset`,'click',()=>{ Object.assign(f,{q:'',pic:'',st:'',brand:'',chk:'',mine:false,news:false}); renderTable(sheet); });
   on(`${key}-addcat`,'click',()=>addCategory(sheet));
   on(`${key}-colreset`,'click',()=>{ colOrder=[...DEFAULT_COLS]; saveCols(); renderTable(sheet); });
   // 열 드래그
@@ -378,7 +389,7 @@ function renderGantt(){
     const a=groupAgg(g);
     rows += `<div class="g-row g1"><div class="g-lab">${esc(g.num)}. ${esc(g.cat)}</div><div class="g-track"><div class="g-grid">${grid}</div>${tx}${a.start&&a.end?`<div class="g-bar grp" style="left:${X(a.start)}px;width:${Math.max(px,X(addDays(a.end,1))-X(a.start))}px"></div>`:''}</div></div>`;
     for(const r of ts){
-      rows += `<div class="g-row" data-id="${r.id}"><div class="g-lab" title="${esc(titleOf(r))} · PIC ${esc(r.pic||'–')}"><span class="mono" style="color:var(--muted)">${r.id}</span><span class="g-nm">${r.is_milestone?'◆ ':''}${esc(r.cat)}</span><span class="g-pic">${esc(r.pic||'')}</span></div><div class="g-track">${`<div class="g-grid">${grid}</div>`}${tx}${bar(r)}</div></div>`;
+      rows += `<div class="g-row" data-id="${r.id}"><div class="g-lab" title="${esc(titleOf(r))} · PIC ${esc(r.pic||'–')}"><span class="mono" style="color:var(--muted)">${r.id}</span><span class="g-nm">${newsOf(r)?'<i class="nb-dot" title="새 소식"></i>':''}${r.is_milestone?'◆ ':''}${esc(r.cat)}</span><span class="g-pic">${esc(r.pic||'')}</span></div><div class="g-track">${`<div class="g-grid">${grid}</div>`}${tx}${bar(r)}</div></div>`;
     }
   }
   $('v-gantt').innerHTML = `<div class="toolbar">
@@ -577,7 +588,7 @@ function myRow(r){
   const sub = [r.brand, r.num && `${r.sheet==='REQ'?'REQ ':''}${r.num}`, d!=null && ddTxt(d), ck.n && `체크 ${ck.done}/${ck.n}`, CMT_N[r.id] && `댓글 ${CMT_N[r.id]}`].filter(Boolean).map(esc).join(' · ');
   const seg = PROG_STEPS.map(p=>`<button type="button" data-pg="${p}" class="${r.prog!=null && Math.round(r.prog*100)>=p*100 && (p>0||r.prog===0)?'on':''}" ${ed&&!ck.n?'':'disabled'} title="${ck.n?'체크리스트로 자동 계산':Math.round(p*100)+'%'}">${Math.round(p*100)}</button>`).join('');
   return `<div class="mrow" data-row="${r.id}">
-    <div class="mt"><button type="button" class="t" data-open="${r.id}">${esc(titleOf(r))}</button>
+    <div class="mt"><button type="button" class="t" data-open="${r.id}">${esc(titleOf(r))}</button>${newsChip(r)}
       <div class="sub">${sub}${c && c!=='진행' && c!=='예정' ? ' '+chkChip(c):''}${stale(r)?` <span class="chip k-warn">${ago(r.updated_at)} 업데이트</span>`:''}</div></div>
     <select data-st aria-label="진행 상태" ${ed?'':'disabled'}>${STATUS.map(s=>`<option value="${s}" ${s===r.st?'selected':''}>${ST_KO[s]}</option>`).join('')}${r.st?'':'<option value="" selected>상태 없음</option>'}</select>
     <div class="seg" role="group" aria-label="진척률">${seg}</div>
@@ -587,7 +598,7 @@ function myRow(r){
 }
 function bCard(r){
   const d=dday(r), ck=ckStat(r.id);
-  return `<div class="bcard" draggable="${owns(r)}" data-card="${r.id}"><button type="button" class="t" data-open="${r.id}">${esc(titleOf(r))}</button>
+  return `<div class="bcard" draggable="${owns(r)}" data-card="${r.id}"><button type="button" class="t" data-open="${r.id}">${esc(titleOf(r))}</button>${newsChip(r)}
     <div class="sub">${[r.brand, d!=null&&ddTxt(d), r.prog!=null&&pct(r.prog), ck.n&&`체크 ${ck.done}/${ck.n}`, CMT_N[r.id]&&`댓글 ${CMT_N[r.id]}`].filter(Boolean).map(esc).join(' · ')} ${check(r)==='지연'?chkChip('지연'):''}</div></div>`;
 }
 
@@ -639,9 +650,9 @@ function renderMy(){
       </div>
       <div class="side">
         <div class="panel"><h2 class="sec">내가 백업인 업무 <span class="hist" style="display:inline">${bak.length}건</span></h2>
-          <div class="side-list">${bak.slice(0,8).map(r=>`<button type="button" data-open="${r.id}"><span>${esc(titleOf(r))}</span><span class="hist" style="display:inline">${esc(r.pic||'')}${dday(r)!=null?' · '+ddTxt(dday(r)):''}</span></button>`).join('')||'<div class="hist">없어요.</div>'}</div></div>
+          <div class="side-list">${bak.slice(0,8).map(r=>`<button type="button" data-open="${r.id}"><span>${esc(titleOf(r))}${newsChip(r)}</span><span class="hist" style="display:inline">${esc(r.pic||'')}${dday(r)!=null?' · '+ddTxt(dday(r)):''}</span></button>`).join('')||'<div class="hist">없어요.</div>'}</div></div>
         ${all.length?`<div class="panel"><h2 class="sec">전원 업무 <span class="hist" style="display:inline">${all.length}건</span></h2>
-          <div class="side-list">${all.slice(0,6).map(r=>`<button type="button" data-open="${r.id}"><span>${esc(titleOf(r))}</span><span class="hist" style="display:inline">${stChip(r.st)}</span></button>`).join('')}</div></div>`:''}
+          <div class="side-list">${all.slice(0,6).map(r=>`<button type="button" data-open="${r.id}"><span>${esc(titleOf(r))}${newsChip(r)}</span><span class="hist" style="display:inline">${stChip(r.st)}</span></button>`).join('')}</div></div>`:''}
         <div class="panel"><h2 class="sec">내 업무 소식 <span class="hist" style="display:inline">최근 14일 · 다른 사람이 바꾼 내용</span></h2><div class="hist" id="my-news"><div>불러오는 중…</div></div></div>
         ${me.role==='admin'&&inbox.length?`<div class="panel"><h2 class="sec">미분류함 <span class="hist" style="display:inline">${inbox.length}건 · WBS 위치 정리 필요</span></h2>
           <div class="side-list">${inbox.slice(0,6).map(r=>`<button type="button" data-open="${r.id}"><span>${esc(titleOf(r))}</span><span class="hist" style="display:inline">${esc(r.created_by||r.pic||'')}</span></button>`).join('')}</div></div>`:''}
@@ -911,13 +922,49 @@ function openNotifs(){
 }
 $('bellBtn').addEventListener('click', openNotifs);
 
+// ---------------- 새 소식 배지: 내가 마지막으로 열어 본 뒤 다른 사람이 등록·수정·댓글을 단 업무
+// 업무를 열면 확인 처리. 기록은 각자 브라우저에 저장 (처음 쓰는 날 이후의 변경부터 표시)
+let SEEN = {}, SEEN_BASE = 0, CMT_TIMES = {};
+const ts = v => v ? new Date(v).getTime() : 0;
+function seenLoad(){
+  SEEN = {}; SEEN_BASE = 0;
+  try{ const o = JSON.parse(localStorage.getItem(nKey('seenItems'))||'null'); if(o){ SEEN = o.items||{}; SEEN_BASE = o.base||0; } }catch(e){}
+  if(!SEEN_BASE){ SEEN_BASE = Date.now(); seenSave(); }
+}
+function seenSave(){
+  // 오래된 기록은 정리 (60일)
+  const cut = Date.now()-60*DAY; for(const k in SEEN) if(SEEN[k]<cut) delete SEEN[k];
+  try{ localStorage.setItem(nKey('seenItems'), JSON.stringify({base:SEEN_BASE, items:SEEN})); }catch(e){}
+}
+const seenAt = id => Math.max(SEEN[id]||0, SEEN_BASE);
+function newsOf(r){
+  if(!r || !me) return null;
+  const t = seenAt(r.id);
+  if(NOTIFS.some(x=>x.kind==='new' && x.item===r.id && ts(x.at)>t)) return {kind:'new', label:'새 업무'};
+  const n = (CMT_TIMES[r.id]||[]).filter(x=>x>t).length;
+  if(n) return {kind:'cmt', label:`새 댓글 ${n}`};
+  if(r.updated_by && r.updated_by!==me.name && ts(r.updated_at)>t) return {kind:'upd', label:'수정됨', by:r.updated_by};
+  return null;
+}
+const newsChip = r => { const x = newsOf(r); return x ? ` <span class="nb nb-${x.kind}" title="${x.by?esc(x.by)+' 님이 수정 · ':''}열어 보면 사라져요">${x.label}</span>` : ''; };
+function markSeen(id, quiet){ if(!id) return; SEEN[id] = Date.now(); seenSave(); if(!quiet) newsTabs(); }
+function markSeenMany(list){ const now = Date.now(); for(const r of list) SEEN[r.id] = now; seenSave(); newsTabs(); }
+function newsTabs(){
+  if(!me) return;
+  const cnt = arr => arr.filter(r=>r.lvl!=='L1' && newsOf(r)).length;
+  const set = (v, n) => { const a = document.querySelector(`#tabs a[data-v="${v}"]`); if(!a) return; let b = a.querySelector('.newc'); if(!b){ b = document.createElement('span'); b.className='newc'; a.appendChild(b); } b.textContent = n>99?'99+':n; b.hidden = !n; b.title = n?`새 소식 ${n}건`:''; };
+  set('my', cnt(items.filter(r=>isTask(r) && (r.pic===me.name || r.bak===me.name))));
+  set('wbs', cnt(items.filter(r=>r.sheet==='WBS')));
+  set('req', cnt(items.filter(r=>r.sheet==='REQ')));
+}
+async function loadCommentTimes(){
+  const { data, error } = await sb.from('item_comments').select('item_id,author,created_at').limit(10000);
+  CMT_N = {}; CMT_TIMES = {}; if(error) return;
+  for(const c of data){ CMT_N[c.item_id] = (CMT_N[c.item_id]||0)+1; if(c.author!==me.name) (CMT_TIMES[c.item_id] ||= []).push(ts(c.created_at)); }
+}
+
 // ---------------- 댓글 · @멘션 (업무 상세 안). 멘션된 사람과 업무 담당자에게 알림
 let CMT_N = {};
-async function loadCommentCounts(){
-  const { data, error } = await sb.from('item_comments').select('item_id').limit(10000);
-  CMT_N = {}; if(error) return;
-  for(const c of data) CMT_N[c.item_id] = (CMT_N[c.item_id]||0)+1;
-}
 const URL_RE = /(https?:\/\/[^\s<>"']+)/g;
 function richText(t){
   let h = esc(t).replace(URL_RE, u=>`<a href="${u}" target="_blank" rel="noopener noreferrer">${u.length>60?u.slice(0,57)+'…':u}</a>`);
@@ -990,19 +1037,20 @@ function bindComments(r){
 function onCommentInsert(c){
   if(!me) return;
   CMT_N[c.item_id] = (CMT_N[c.item_id]||0) + 1;
+  if(c.author!==me.name){ (CMT_TIMES[c.item_id] ||= []).push(ts(c.created_at)); if(selId===c.item_id) markSeen(c.item_id); }
   if(selId===c.item_id && byId[c.item_id] && $('d-cmts')) loadComments(byId[c.item_id]);
   if(c.author===me.name) return;
   const r = byId[c.item_id]; if(!r) return;
   const mentioned = (c.mentions||[]).includes(me.name);
   const mine = r.pic===me.name || r.bak===me.name || r.created_by===me.name;
   if(mentioned || mine) pushNotif({key:'c'+c.id, kind:mentioned?'mention':'comment', item:c.item_id, by:c.author, at:c.created_at, text:c.body.slice(0,80)}, true);
-  else if(current()==='my') rerender();
+  if(!$('drawer').classList.contains('on')) rerender(); else newsTabs();
 }
 
 // ---------------- drawer (상세·편집)
 const drawer=$('drawer'), scrim=$('scrim');
 async function openDrawer(id){
-  const r=byId[id]; if(!r) return; selId=id;
+  const r=byId[id]; if(!r) return; selId=id; markSeen(id);
   const ro = !owns(r);
   const ck = ckStat(r.id);
   const opt=(arr,v,labels)=>`<option value=""></option>`+arr.map((x,i)=>`<option value="${esc(x)}" ${x===v?'selected':''}>${esc(labels?labels[i]:x)}</option>`).join('');
@@ -1069,7 +1117,7 @@ async function openDrawer(id){
   if(selId!==id) return;
   $('d-hist').innerHTML = error ? `<div>이력을 불러오지 못했습니다.</div>` : (data.length ? data.map(h=>`<div>${new Date(h.changed_at).toLocaleString('ko-KR',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'})} · ${esc(h.changed_by)} · ${esc(h.changes)}</div>`).join('') : '<div>아직 변경 이력이 없습니다.</div>');
 }
-function closeDrawer(){ drawer.classList.remove('on'); scrim.classList.remove('on'); selId=null; rerender(); }
+function closeDrawer(){ if(selId) markSeen(selId); drawer.classList.remove('on'); scrim.classList.remove('on'); selId=null; rerender(); }
 async function saveDrawer(r){
   const patch={}, changes=[];
   for(const k of FIELDS){
@@ -1400,6 +1448,7 @@ const VIEWS=['my','dashboard','wbs','req','weekly','cal','gantt','admin'];
 const current=()=>{ const h=location.hash.slice(1); return VIEWS.includes(h)?h:'my'; };
 function rerender(){
   if(!me) return;
+  newsTabs();
   const v=current();
   document.querySelectorAll('#tabs a').forEach(a=>a.classList.toggle('on',a.dataset.v===v));
   document.querySelectorAll('.view').forEach(s=>s.classList.toggle('on',s.id==='v-'+v));
