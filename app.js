@@ -194,14 +194,14 @@ function renderDashboard(){
   const OTHER='(목록에 없는 이름)';
   const ppl = [...PEOPLE,OTHER,'(미지정)'].map(p=>{ const mine=work.filter(r=>p==='(미지정)'?!r.pic:p===OTHER?(r.pic&&!PEOPLE.includes(r.pic)):r.pic===p); return {p, cnt:STATUS.map(s=>mine.filter(r=>r.st===s).length), none:mine.filter(r=>!STATUS.includes(r.st)).length, tot:mine.length, late:mine.filter(r=>check(r)==='지연').length, bak:work.filter(r=>p!=='(미지정)'&&p!==OTHER&&r.bak===p).length}; }).filter(x=>x.tot||x.bak||PEOPLE.includes(x.p));
   const max = Math.max(...ppl.map(x=>x.tot),1);
-  $('v-dashboard').innerHTML = `
+  $('v-dashboard').innerHTML = `<div class="band">
   <div class="grid-tiles">${prog('WBS',W,'wbs')}${prog('대표님 REQ',R,'req')}
     ${tile('지연',W.late+R.late,'종료일이 지났는데 완료되지 않음','bad','chk:지연')}
     ${tile('임박',W.soon+R.soon,'3일 이내 마감','warn','chk:임박')}
     ${tile('⚠ 확인 필요',W.warn+R.warn,'완료인데 진척률 미달 · 종료일 없음','caution','chk:⚠')}
     ${tile('이번 주 마감',due.length,`${fmtD(w0)} ~ ${fmtD(w1)}`,'','weekly')}
     ${(()=>{const n=items.filter(r=>r.parent&&/-INBOX$/.test(r.parent)).length; return n?tile('미분류함',n,'WBS 위치 정리가 필요한 새 업무','warn','wbs'):'';})()}
-    ${(()=>{const n=items.filter(r=>r.delete_requested_at).length; return n?tile('삭제 대기',n,me.role==='admin'?'승인이 필요한 삭제 요청':'관리자 승인 대기 중','bad','chk:삭제 대기'):'';})()}</div>
+    ${(()=>{const n=items.filter(r=>r.delete_requested_at).length; return n?tile('삭제 대기',n,me.role==='admin'?'승인이 필요한 삭제 요청':'관리자 승인 대기 중','bad','chk:삭제 대기'):'';})()}</div></div>
   <div class="cols">
     <div class="panel"><h2 class="sec">담당자별 업무량</h2>
       <div class="people">${ppl.map(x=>`<div class="person" title="${esc(x.p)} · 담당 ${x.tot}건 (${STATUS.map((s,i)=>x.cnt[i]?ST_KO[s]+' '+x.cnt[i]:'').filter(Boolean).join(', ')}${x.none?', 상태 없음 '+x.none:''}) · Backup ${x.bak}건"><span class="nm">${esc(x.p)}</span><div class="stack" style="width:${Math.max(x.tot/max*100,2)}%">${x.cnt.map((c,i)=>c?`<span class="s-${ST_CLS[STATUS[i]]}" style="width:${c/x.tot*100}%"></span>`:'').join('')}${x.none?`<span style="width:${x.none/x.tot*100}%;background:var(--line)"></span>`:''}</div><span class="tot">${x.tot}${x.late?` <span style="color:var(--bad)">·${x.late}</span>`:''}</span></div>`).join('')}</div>
@@ -330,6 +330,22 @@ function renderWeekly(){
   $('wk-copy').addEventListener('click',async()=>{ try{ await navigator.clipboard.writeText(text); toast('보고 문구를 복사했습니다. 메신저에 붙여넣으세요.'); }catch(e){ toast('복사하지 못했습니다. 브라우저 권한을 확인하세요.'); } });
 }
 
+// ---------------- 확인 창 (실수 방지). 확인이면 true
+function confirmBox({title, what='', from, to, ok='변경', cancel='취소'}){
+  return new Promise(res => {
+    const back = document.createElement('div'); back.className='modal-back';
+    back.innerHTML = `<div class="modal" role="dialog" aria-modal="true" aria-labelledby="cb-t"><h3 id="cb-t">${esc(title)}</h3>${what?`<div class="what">${esc(what)}</div>`:''}
+      ${from?`<div class="cmp"><div><small>기존</small><b>${from}</b></div><span aria-hidden="true">→</span><div class="new"><small>변경</small><b>${to}</b></div></div>`:''}
+      <div class="acts"><button class="btn" type="button" data-r="0">${esc(cancel)}</button><button class="btn primary" type="button" data-r="1">${esc(ok)}</button></div></div>`;
+    const done = v => { document.removeEventListener('keydown', key, true); back.remove(); res(v); };
+    const key = e => { if(e.key==='Escape'){ e.stopPropagation(); e.preventDefault(); done(false); } else if(e.key==='Enter'){ e.preventDefault(); done(true); } };
+    back.addEventListener('click', e => { const b=e.target.closest('[data-r]'); if(b) done(b.dataset.r==='1'); else if(e.target===back) done(false); });
+    document.addEventListener('keydown', key, true);
+    document.body.appendChild(back); back.querySelector('[data-r="1"]').focus();
+  });
+}
+const rangeTxt = (s,e,ms) => ms ? `◆ ${fmt(iso(e))}` : `${s?fmt(iso(s)):'–'} ~ ${fmt(iso(e))}${s?` (${Math.round((e-s)/DAY)+1}일)`:''}`;
+
 // ---------------- gantt — 막대를 끌어 일정 이동, 양 끝을 끌어 시작·마감 조절 (수정 권한이 있는 업무만). ◆ = 마일스톤
 const G_ZOOM = {wide:26, mid:12, narrow:5};   // 하루당 px
 const addDays = (d,n) => new Date(d.getTime()+n*DAY);
@@ -370,7 +386,7 @@ function renderGantt(){
       <div class="vt" role="group" aria-label="확대"><button type="button" data-gz="narrow" class="${ui.ganttZoom==='narrow'?'on':''}">분기</button><button type="button" data-gz="mid" class="${ui.ganttZoom==='mid'?'on':''}">월</button><button type="button" data-gz="wide" class="${ui.ganttZoom==='wide'?'on':''}">주</button></div>
       <label class="chk-inline"><input type="checkbox" id="g-mine" ${onlyMine?'checked':''}> 내 업무만</label>
       <button class="btn" type="button" id="g-today">오늘로</button>
-      <div class="legend" style="margin:0"><span><i class="s-ip"></i>진행 중</span><span><i class="s-pl"></i>예정</span><span><i class="s-oh"></i>보류</span><span><i class="s-co"></i>완료</span><span><i style="background:var(--bad)"></i>지연</span><span>◆ 마일스톤 · 빨간 세로선 = 오늘</span></div>
+      <div class="legend" style="margin:0"><span><i class="s-ip"></i>진행 중</span><span><i class="s-pl"></i>예정</span><span><i class="s-oh"></i>보류</span><span><i class="s-co"></i>완료</span><span><i style="background:var(--bad)"></i>지연</span><span>◆ 마일스톤 · 초록 세로선 = 오늘</span></div>
       <span class="count">막대를 끌면 일정 이동 · 양 끝을 끌면 시작·마감 조절 (내 업무만)</span></div>
     <div class="gantt" id="g-box"><div class="g-head" style="grid-template-columns:300px ${W}px;width:${300+W}px"><div class="g-lab">업무</div><div class="g-weeks">${head}</div></div>${rows.replace(/class="g-row/g,`style="grid-template-columns:300px ${W}px;width:${300+W}px" class="g-row`)||'<div class="empty">일정이 있는 업무가 없어요.</div>'}</div>
     <div class="g-tip hidden" id="g-tip"></div>`;
@@ -417,6 +433,10 @@ function bindGanttDrag(box, px){
     if(iso(d.ne)!==(d.r.end_date||'').slice(0,10)) patch.end_date = iso(d.ne);
     if(d.r.is_milestone && d.r.start_date) patch.start_date = iso(d.ne);
     if(!Object.keys(patch).length){ renderGantt(); return; }
+    const ms = !!d.r.is_milestone, hasS = !!d.r.start_date;
+    const yes = await confirmBox({title: ms?'마일스톤 날짜를 바꿀까요?':'일정을 변경할까요?', what: titleOf(d.r),
+      from: rangeTxt(hasS?d.s:null, d.e, ms), to: rangeTxt(hasS?d.ns:null, d.ne, ms), ok:'변경'});
+    if(!yes){ renderGantt(); toast('일정 변경을 취소했어요.'); return; }
     const ok = await quickUpdate(d.r, patch);
     if(ok) toast(`일정을 ${fmtD(pd(d.r.start_date))||''}${d.r.start_date?' ~ ':''}${fmtD(pd(d.r.end_date))}로 바꿨어요.`);
     renderGantt();
@@ -593,20 +613,20 @@ function renderMy(){
       else cs = cs.sort((a,b)=>{ const x=focusRank(a), y=focusRank(b); return x[0]-y[0] || x[1]-y[1]; });
       return `<div class="bcol" data-col="${s}"><div class="bh">${stChip(s)} <span class="mono">${cs.length}</span>${s==='Completed'?' <span class="hist" style="display:inline">최근</span>':''}</div>${cs.map(bCard).join('')||'<div class="hist" style="padding:6px 2px">여기로 끌어 놓으면 상태가 바뀌어요</div>'}</div>`;
     }).join('')}</div>`;
-  el.innerHTML = `
+  el.innerHTML = `<div class="band">
     <div class="my-head">
       <h2>${esc(me.name)} 님, 오늘 챙길 업무 ${todayN}건</h2>
       <span class="hist" style="display:inline">${fmtD(w0)} ~ ${fmtD(w1)} 주 · 진행 중 ${ip.length}건</span>
       <div class="spacer"></div>
       <button class="btn" type="button" id="my-report">내 주간보고 복사</button>
-      ${ed?'<button class="btn primary" type="button" id="my-add">+ 업무 등록</button>':''}
+      ${ed?'<button class="btn mint" type="button" id="my-add">+ 업무 등록</button>':''}
     </div>
     <div class="grid-tiles four">
       ${tile('late','지연',late,'bad','마감일이 지났어요')}
       ${tile('week','이번 주 마감',week,'warn',`${fmtD(w0)} ~ ${fmtD(w1)}`)}
       ${tile('ip','진행 중',ip,'','지금 하고 있는 업무')}
       ${tile('stale','업데이트 필요',st,'caution',`진행 중인데 ${STALE_DAYS}일 넘게 그대로`)}
-    </div>
+    </div></div>
     <div class="my-grid">
       <div class="panel" style="padding:0">
         <div class="ph"><b>${f.filter?esc(FILTERS[f.filter][0]):'오늘 집중'}</b>
@@ -1423,10 +1443,10 @@ $('xlsxBtn').addEventListener('click', async ()=>{
       const S=sheetStats(sheet);
       ws.addRow([`${sheet==='WBS'?'JC EDU Marketing WBS':'JC EDU 대표님 REQ'}  ·  ${iso(today)} 기준  ·  실제 진척 ${pct(S.actual)} / 계획 ${pct(S.plan)}`]).font={bold:true,size:14};
       const hr=ws.addRow(head); hr.height=30;
-      hr.eachCell(c=>{c.font={bold:true,color:{argb:'FFFFFFFF'}};c.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FF64005F'}};c.alignment={vertical:'middle',horizontal:'center',wrapText:true};});
+      hr.eachCell(c=>{c.font={bold:true,color:{argb:'FFFFFFFF'}};c.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FF000000'}};c.alignment={vertical:'middle',horizontal:'center',wrapText:true};});
       for(const row of sheetRows(sheet)){
         const xr=ws.addRow(row.vals); xr.alignment={vertical:'middle',wrapText:true};
-        if(row.lvl==='L1') xr.eachCell({includeEmpty:true},c=>{c.font={bold:true};c.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FFDDDDDD'}};});
+        if(row.lvl==='L1') xr.eachCell({includeEmpty:true},c=>{c.font={bold:true};c.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FFECFFE0'}};});
         if(row.lvl==='C') xr.eachCell({includeEmpty:true},c=>{c.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FFDDEBF7'}};});
         const ck=xr.getCell(15).value; if(ck==='지연') xr.getCell(15).font={bold:true,color:{argb:'FFC00000'}}; else if(ck==='임박') xr.getCell(15).font={bold:true,color:{argb:'FFC65911'}};
       }
@@ -1438,7 +1458,7 @@ $('xlsxBtn').addEventListener('click', async ()=>{
     }
     const { data:hist } = await sb.from('item_history').select('item_id,changed_at,changed_by,changes').order('changed_at',{ascending:false}).limit(2000);
     const hs=wb.addWorksheet('변경 이력');
-    hs.addRow(['일시','ID','수정자','변경 내용']).eachCell(c=>{c.font={bold:true,color:{argb:'FFFFFFFF'}};c.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FF64005F'}};});
+    hs.addRow(['일시','ID','수정자','변경 내용']).eachCell(c=>{c.font={bold:true,color:{argb:'FFFFFFFF'}};c.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FF000000'}};});
     for(const h of hist||[]) hs.addRow([new Date(h.changed_at), h.item_id, h.changed_by, h.changes]);
     hs.getColumn(1).numFmt='yy.mm.dd hh:mm'; [16,9,10,100].forEach((w,i)=>hs.getColumn(i+1).width=w);
     // 모든 셀 글꼴을 Pretendard로 (설치되지 않은 PC에서는 엑셀이 기본 글꼴로 대체)
