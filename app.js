@@ -241,10 +241,10 @@ function rowVisible(r,f){
   if(f.news && !newsOf(r)) return false;
   if(f.chk==='삭제 대기'){ if(!r.delete_requested_at) return false; }
   else if(f.chk){ const c=check(r); if(f.chk==='⚠' ? !c.startsWith('⚠') : c!==f.chk) return false; }
-  if(f.q){ const q=f.q.toLowerCase(); if(![r.id,r.cat,r.task,r.output,r.note,r.pic].some(x=>x&&String(x).toLowerCase().includes(q))) return false; }
+  if(f.q){ const q=f.q.trim().toLowerCase(); if(q && ![r.cat,r.task].some(x=>x&&String(x).toLowerCase().includes(q))) return false; }   // 검색은 업무명·업무 내용에서만
   return true;
 }
-function renderTable(sheet){
+function renderTable(sheet, bodyOnly){
   const key = sheet==='WBS'?'wbs':'req', f = ui[key];
   const groups = items.filter(r=>r.sheet===sheet&&r.lvl==='L1');
   const filtering = f.q||f.pic||f.st||f.brand||f.chk||f.mine||f.news;
@@ -271,9 +271,9 @@ function renderTable(sheet){
   }
   const pick=(arr,v,lab)=>`<option value="">${lab}</option>`+arr.map(x=>`<option ${x===v?'selected':''}>${esc(x)}</option>`).join('');
   const ncols = 3 + colOrder.length;
-  $('v-'+key).innerHTML = `
+  const html = `
     <div class="toolbar">
-      <input type="search" id="${key}-q" placeholder="ID·업무·비고 검색" value="${esc(f.q)}">
+      <input type="search" id="${key}-q" placeholder="업무명·업무 내용 검색" aria-label="업무명·업무 내용 검색" value="${esc(f.q)}">
       <select id="${key}-pic" aria-label="담당자">${pick(PEOPLE,f.pic,'담당자 전체')}</select>
       <select id="${key}-st" aria-label="진행 상태"><option value="">상태 전체</option>${STATUS.map(s=>`<option value="${s}" ${s===f.st?'selected':''}>${ST_KO[s]}</option>`).join('')}</select>
       <select id="${key}-brand" aria-label="브랜드">${pick(BRANDS,f.brand,'브랜드 전체')}</select>
@@ -287,8 +287,17 @@ function renderTable(sheet){
       <span class="count">${filtering?`${shown} / ${total}행 표시`:`${total}행`} · <button class="linkbtn" type="button" id="${key}-colreset" title="열 제목을 끌어서 순서를 바꿀 수 있습니다">열 순서 초기화</button></span>
     </div>
     <div class="tablewrap"><table><thead><tr><th>ID</th><th>#</th><th>업무</th>${colOrder.map(k=>`<th draggable="true" data-col="${k}" class="dragcol" title="끌어서 좌우로 이동">${MOVABLE[k].label}</th>`).join('')}</tr></thead><tbody>${body||`<tr><td colspan="${ncols}" class="empty">조건에 맞는 업무가 없습니다.</td></tr>`}</tbody></table></div>`;
+  const view = $('v-'+key);
   const on=(id,ev,fn)=>{ const el=$(id); if(el) el.addEventListener(ev,fn); };
-  on(`${key}-q`,'input',e=>{f.q=e.target.value; renderTable(sheet); const i=$(`${key}-q`); i.focus(); i.setSelectionRange(i.value.length,i.value.length);});
+  if(bodyOnly && $(`${key}-q`)){
+    const tmp=document.createElement('div'); tmp.innerHTML=html;
+    view.querySelector('.tablewrap').replaceWith(tmp.querySelector('.tablewrap'));
+    view.querySelector('.toolbar .count').replaceWith(tmp.querySelector('.toolbar .count'));
+    bindBody(); return;
+  }
+  view.innerHTML = html;
+  // 검색창은 다시 만들지 않고 표만 갱신 (한글 입력 중 자모가 분리되지 않게)
+  on(`${key}-q`,'input',e=>{ f.q=e.target.value; renderTable(sheet, true); });
   for(const k of ['pic','st','brand','chk']) on(`${key}-${k}`,'change',e=>{f[k]=e.target.value; renderTable(sheet);});
   on(`${key}-mine`,'change',e=>{f.mine=e.target.checked; renderTable(sheet);});
   on(`${key}-news`,'change',e=>{f.news=e.target.checked; renderTable(sheet);});
@@ -296,6 +305,8 @@ function renderTable(sheet){
   on(`${key}-fold`,'click',()=>{ if(f.collapsed.size) f.collapsed.clear(); else groups.forEach(g=>f.collapsed.add(g.id)); renderTable(sheet); });
   on(`${key}-reset`,'click',()=>{ Object.assign(f,{q:'',pic:'',st:'',brand:'',chk:'',mine:false,news:false}); renderTable(sheet); });
   on(`${key}-addcat`,'click',()=>addCategory(sheet));
+  bindBody();
+  function bindBody(){
   on(`${key}-colreset`,'click',()=>{ colOrder=[...DEFAULT_COLS]; saveCols(); renderTable(sheet); });
   // 열 드래그
   let dragKey=null;
@@ -312,6 +323,7 @@ function renderTable(sheet){
       saveCols(); renderTable(sheet);
     });
   });
+  }
 }
 
 // ---------------- weekly
@@ -1453,7 +1465,7 @@ function rerender(){
   document.querySelectorAll('#tabs a').forEach(a=>a.classList.toggle('on',a.dataset.v===v));
   document.querySelectorAll('.view').forEach(s=>s.classList.toggle('on',s.id==='v-'+v));
   if(v==='admin' && me.role!=='admin'){ location.hash='my'; return; }
-  if(v==='my') renderMy(); else if(v==='admin') renderAdmin(); else if(v==='dashboard') renderDashboard(); else if(v==='wbs') renderTable('WBS'); else if(v==='req') renderTable('REQ'); else if(v==='weekly') renderWeekly(); else if(v==='cal') renderCal(); else renderGantt();
+  if(v==='my') renderMy(); else if(v==='admin') renderAdmin(); else if(v==='dashboard') renderDashboard(); else if(v==='wbs'||v==='req') renderTable(v==='wbs'?'WBS':'REQ', document.activeElement && document.activeElement.id===v+'-q'); else if(v==='weekly') renderWeekly(); else if(v==='cal') renderCal(); else renderGantt();
 }
 window.addEventListener('hashchange',()=>{ if(location.hash.includes('access_token')) return; rerender(); });
 document.querySelector('main').addEventListener('click',e=>{
