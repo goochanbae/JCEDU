@@ -142,6 +142,7 @@ async function enter(session){
   await loadItems();
   await loadChecks();
   subscribe();
+  loadMissed();
   rerender();
 }
 async function loadItems(){
@@ -174,6 +175,7 @@ function subscribe(){
     if(p.eventType==='DELETE'){ items = items.filter(r=>r.id!==p.old.id); }
     else { const n = norm(p.new); const i = items.findIndex(r=>r.id===n.id); if(i>=0) items[i]=n; else items.push(n); }
     index(); refreshPeople();
+    if(p.eventType==='INSERT') onItemInsert(byId[p.new.id]);
     if(selId && p.new && p.new.id===selId && p.new.updated_by!==me.name) toast(`${p.new.updated_by||'다른 팀원'}님이 이 업무를 방금 수정했습니다.`);
     if(!$('drawer').classList.contains('on')) rerender();
   }).subscribe(st => { const el=$('syncState'); el.textContent = st==='SUBSCRIBED'?'실시간 반영 중':'연결 중'; el.classList.toggle('live', st==='SUBSCRIBED'); });
@@ -652,6 +654,76 @@ function bindChecks(r){
     setTimeout(()=>{ const i=$('d-ckadd'); if(i) i.querySelector('input').focus(); }, 30);
   };
 }
+
+// ---------------- 알림: 다른 사람이 새 업무를 등록하면 접속 중인 사람에게 바로 알림 (실시간)
+// 접속하지 않았던 동안 등록된 업무는 다음 로그인 때 변경 이력에서 모아 보여줌. 알림 목록은 각자 브라우저에 저장
+let NOTIFS = [];
+const nKey = k => `jcwbs-${k}-${(me&&me.email||'').toLowerCase()}`;
+function nSave(){ try{ localStorage.setItem(nKey('notifs'), JSON.stringify(NOTIFS.slice(0,60))); }catch(e){} }
+function nLoad(){ try{ NOTIFS = JSON.parse(localStorage.getItem(nKey('notifs'))||'[]'); }catch(e){ NOTIFS=[]; } }
+function nBadge(){
+  const n = NOTIFS.filter(x=>!x.read).length, b=$('bellN');
+  b.textContent = n>99?'99+':n; b.classList.toggle('hidden', !n);
+  $('bellBtn').setAttribute('aria-label', n?`알림 ${n}건 읽지 않음`:'알림');
+}
+function pushNotif(itemId, by, at, live){
+  if(NOTIFS.some(x=>x.item===itemId)) return;
+  NOTIFS.unshift({item:itemId, by, at, read:false}); nSave(); nBadge();
+  if(!live) return;
+  // 표에서 '+ 업무 추가'로 만든 직후엔 이름이 '새 업무'라서, 잠시 뒤 실제 이름으로 알림
+  const r0 = byId[itemId];
+  setTimeout(()=>{
+    const r = byId[itemId]; if(!r) return;
+    const toMe = r.pic===me.name;
+    const msg = `${by} 님이 ${toMe?'나에게 배정된 ':''}새 업무를 등록했어요: ${titleOf(r)}`;
+    toast(msg);
+    if(document.hidden && 'Notification' in window && Notification.permission==='granted'){
+      try{ const n = new Notification(toMe?'나에게 새 업무가 배정됐어요':'새 업무가 등록됐어요', {body:`${titleOf(r)} · ${by}`, tag:'jcwbs-'+itemId});
+        n.onclick = () => { window.focus(); openDrawer(itemId); markRead(itemId); n.close(); }; }catch(e){}
+    }
+  }, r0 && r0.cat==='새 업무' ? 15000 : 300);
+}
+function markRead(itemId){ const x=NOTIFS.find(n=>n.item===itemId); if(x && !x.read){ x.read=true; nSave(); nBadge(); } }
+function onItemInsert(r){
+  if(!me || r.lvl==='L1') return;
+  const by = r.created_by || r.updated_by;
+  if(!by || by===me.name) return;
+  pushNotif(r.id, by, r.updated_at || new Date().toISOString(), true);
+}
+async function loadMissed(){
+  nLoad();
+  let last; try{ last = localStorage.getItem(nKey('seen')); }catch(e){}
+  const since = last || new Date(Date.now()-3*DAY).toISOString();   // 처음 쓰는 사람은 최근 3일치
+  const { data } = await sb.from('item_history').select('item_id,changed_at,changed_by,changes').like('changes','업무 %').neq('changed_by',me.name).gt('changed_at',since).order('changed_at',{ascending:true}).limit(100);
+  for(const h of data||[]) if(/^업무 (등록|추가) /.test(h.changes) && byId[h.item_id]) pushNotif(h.item_id, h.changed_by, h.changed_at, false);
+  try{ localStorage.setItem(nKey('seen'), new Date().toISOString()); }catch(e){}
+  nBadge();
+  const missed = NOTIFS.filter(x=>!x.read && x.at>since).length;
+  if(missed) toast(`접속하지 않은 동안 새 업무 ${missed}건이 등록됐어요. 오른쪽 위 알림에서 확인하세요.`);
+}
+// 접속 중에는 마지막 확인 시각을 계속 갱신 (다음 로그인 때 중복 알림 방지)
+setInterval(()=>{ if(me) try{ localStorage.setItem(nKey('seen'), new Date().toISOString()); }catch(e){} }, 60000);
+function openNotifs(){
+  selId=null;
+  const perm = 'Notification' in window ? Notification.permission : 'unsupported';
+  const list = NOTIFS.filter(x=>byId[x.item]);
+  drawer.innerHTML = `
+    <header><div style="flex:1"><div class="id">새로 등록된 업무</div><h3>알림</h3></div><button class="btn" type="button" id="nt-close">닫기</button></header>
+    <div class="body">
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        ${list.some(x=>!x.read)?'<button class="btn" type="button" id="nt-all">모두 읽음</button>':''}
+        ${perm==='default'?'<button class="btn" type="button" id="nt-perm">바탕화면 알림 켜기</button>':''}
+      </div>
+      <p class="hist" style="margin:0">${perm==='granted'?'바탕화면 알림이 켜져 있어요. 다른 창을 보고 있을 때도 알려드려요.':perm==='denied'?'바탕화면 알림이 브라우저에서 차단돼 있어요. 주소창 왼쪽 자물쇠 아이콘 → 알림 허용으로 바꿀 수 있어요.':perm==='unsupported'?'이 브라우저는 바탕화면 알림을 지원하지 않아요.':'켜 두면 이 사이트를 띄워 둔 채 다른 창을 보고 있을 때도 알려드려요.'}</p>
+      <div class="side-list nlist">${list.map(x=>{ const r=byId[x.item]; return `<button type="button" data-nt="${x.item}" class="${x.read?'':'unread'}"><span>${x.read?'':'<i class="dot"></i>'}${esc(titleOf(r))}</span><span class="hist" style="display:inline">${esc(x.by)} 님 등록 · ${ago(x.at)} · PIC ${esc(r.pic||'–')}${r.pic===me.name?' (나)':''}${r.parent&&/-INBOX$/.test(r.parent)?' · 미분류함':''}</span></button>`; }).join('') || '<div class="hist">아직 알림이 없어요. 다른 사람이 새 업무를 등록하면 여기에 쌓여요.</div>'}</div>
+    </div>`;
+  drawer.classList.add('on'); scrim.classList.add('on');
+  $('nt-close').onclick = closeDrawer;
+  if($('nt-all')) $('nt-all').onclick = () => { NOTIFS.forEach(x=>x.read=true); nSave(); nBadge(); openNotifs(); };
+  if($('nt-perm')) $('nt-perm').onclick = async () => { try{ await Notification.requestPermission(); }catch(e){} openNotifs(); };
+  drawer.querySelectorAll('[data-nt]').forEach(b => b.onclick = () => { markRead(b.dataset.nt); openDrawer(b.dataset.nt); });
+}
+$('bellBtn').addEventListener('click', openNotifs);
 
 // ---------------- drawer (상세·편집)
 const drawer=$('drawer'), scrim=$('scrim');

@@ -228,3 +228,9 @@ table.fixed td.wrap{white-space:normal;color:var(--muted);font-size:12px}
 @media (max-width:900px){.grid-tiles.four{grid-template-columns:repeat(2,minmax(0,1fr))}.my-grid{grid-template-columns:1fr}.board{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media (max-width:600px){.mrow{grid-template-columns:minmax(0,1fr) 34px}.mrow .mt{grid-column:1/-1}.mrow .seg{grid-column:1/-1;order:5}.mrow .memo,.mrow .memo-in{order:6}.my-head h2{font-size:16px}}
 .chk-inline{display:inline-flex;gap:5px;align-items:center;font-size:12px;color:var(--muted);white-space:nowrap}
+
+/* 알림 */
+.bell{position:relative;display:inline-flex;align-items:center;gap:6px}
+.nbadge{background:var(--bad);color:#fff;border-radius:999px;font-size:10px;font-weight:700;min-width:18px;height:18px;line-height:18px;padding:0 5px;text-align:center}
+.nlist button.unread span:first-child{color:var(--ink);font-weight:700}
+.nlist .dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--accent);margin-right:6px;vertical-align:1px}
