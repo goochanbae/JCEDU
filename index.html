@@ -62,7 +62,8 @@
     <button class="btn primary" id="xlsxBtn" type="button">엑셀 다운로드</button>
   </div>
   <nav class="tabs" id="tabs">
-    <a href="#dashboard" data-v="dashboard">업무 현황</a>
+    <a href="#my" data-v="my">내 업무</a>
+    <a href="#dashboard" data-v="dashboard">팀 현황</a>
     <a href="#wbs" data-v="wbs">WBS<span class="n" id="nW"></span></a>
     <a href="#req" data-v="req">대표님 REQ<span class="n" id="nR"></span></a>
     <a href="#weekly" data-v="weekly">주간 보고</a>
@@ -71,6 +72,7 @@
   </nav>
 </header>
 <main>
+  <section class="view" id="v-my"></section>
   <section class="view" id="v-dashboard"></section>
   <section class="view" id="v-wbs"></section>
   <section class="view" id="v-req"></section>
