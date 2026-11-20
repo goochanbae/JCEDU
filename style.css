@@ -456,3 +456,6 @@ tr.task:hover td{background:var(--surface-soft)}
 .cmtbtn:hover{border-color:var(--ink);background:var(--accent-soft)}
 .cmtbtn.zero{color:var(--muted);font-weight:600;border-color:transparent;background:transparent}
 tr.task:hover .cmtbtn.zero,.mrow:hover .cmtbtn.zero{border-color:var(--line);background:var(--surface)}
+
+.nb-new{background:var(--mint);color:#000;box-shadow:inset 0 0 0 1px #000;font-weight:900;letter-spacing:.02em}
+.nb-xs{font-size:9px;padding:2px 4px;margin:0 5px 0 0}

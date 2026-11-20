@@ -259,7 +259,7 @@ function renderTable(sheet, bodyOnly){
     shown += vis.length;
     const a = groupAgg(g), col = f.collapsed.has(g.id) && !filtering;
     const gNews = members.filter(r=>newsOf(r)).length;
-    body += `<tr class="g1" data-g="${g.id}"><td><span class="tw">${col?'▸':'▾'}</span>${esc(g.num)}</td><td></td><td>${esc(g.cat)}${delChip(g)}${gNews?` <span class="nb nb-upd">새 소식 ${gNews}</span>`:''} <span style="font-weight:400;color:var(--muted)">· ${a.n}건</span>${canEdit()?`<button class="addbtn" type="button" data-add="${g.id}">+ 업무 추가</button><button class="addbtn" type="button" data-edit="${g.id}">편집</button>`:''}</td>${colOrder.map(k=>`<td class="${MOVABLE[k].cls||''}">${MOVABLE[k].g?MOVABLE[k].g(a):''}</td>`).join('')}</tr>`;
+    body += `<tr class="g1" data-g="${g.id}"><td><span class="tw">${col?'▸':'▾'}</span>${esc(g.num)}</td><td></td><td>${esc(g.cat)}${delChip(g)}${gNews?` <span class="nb nb-new" title="이 카테고리에 새 소식 ${gNews}건">NEW ${gNews}</span>`:''} <span style="font-weight:400;color:var(--muted)">· ${a.n}건</span>${canEdit()?`<button class="addbtn" type="button" data-add="${g.id}">+ 업무 추가</button><button class="addbtn" type="button" data-edit="${g.id}">편집</button>`:''}</td>${colOrder.map(k=>`<td class="${MOVABLE[k].cls||''}">${MOVABLE[k].g?MOVABLE[k].g(a):''}</td>`).join('')}</tr>`;
     if(col) continue;
     for(const r of vis){
       const a2 = r.lvl==='P' ? groupAgg(r) : null;
@@ -401,7 +401,7 @@ function renderGantt(){
     const a=groupAgg(g);
     rows += `<div class="g-row g1"><div class="g-lab">${esc(g.num)}. ${esc(g.cat)}</div><div class="g-track"><div class="g-grid">${grid}</div>${tx}${a.start&&a.end?`<div class="g-bar grp" style="left:${X(a.start)}px;width:${Math.max(px,X(addDays(a.end,1))-X(a.start))}px"></div>`:''}</div></div>`;
     for(const r of ts){
-      rows += `<div class="g-row" data-id="${r.id}"><div class="g-lab" title="${esc(titleOf(r))} · PIC ${esc(r.pic||'–')}"><span class="mono" style="color:var(--muted)">${r.id}</span><span class="g-nm">${newsOf(r)?'<i class="nb-dot" title="새 소식"></i>':''}${r.is_milestone?'◆ ':''}${esc(r.cat)}</span><span class="g-pic">${esc(r.pic||'')}</span></div><div class="g-track">${`<div class="g-grid">${grid}</div>`}${tx}${bar(r)}</div></div>`;
+      rows += `<div class="g-row" data-id="${r.id}"><div class="g-lab" title="${esc(titleOf(r))} · PIC ${esc(r.pic||'–')}"><span class="mono" style="color:var(--muted)">${r.id}</span><span class="g-nm">${newsOf(r)?'<span class="nb nb-new nb-xs" title="새 소식">N</span>':''}${r.is_milestone?'◆ ':''}${esc(r.cat)}</span><span class="g-pic">${esc(r.pic||'')}</span></div><div class="g-track">${`<div class="g-grid">${grid}</div>`}${tx}${bar(r)}</div></div>`;
     }
   }
   $('v-gantt').innerHTML = `<div class="toolbar">
@@ -960,7 +960,8 @@ function newsOf(r){
   return null;
 }
 const cmtBtn = (r, always) => { const n = CMT_N[r.id]||0; return (n||always) ? `<button type="button" class="cmtbtn${n?'':' zero'}" data-cmt="${r.id}" title="${n?`댓글 ${n}개 보기·쓰기`:'댓글 쓰기'}"><i aria-hidden="true"></i>${n||'댓글'}</button>` : ''; };
-const newsChip = r => { const x = newsOf(r); return x ? ` <span class="nb nb-${x.kind}" title="${x.by?esc(x.by)+' 님이 수정 · ':''}열어 보면 사라져요">${x.label}</span>` : ''; };
+// 어떤 변화든 NEW 하나로 표시, 무엇이 바뀌었는지는 마우스를 올리면 보임
+const newsChip = r => { const x = newsOf(r); return x ? ` <span class="nb nb-new" title="${esc(x.label)}${x.by?' · '+esc(x.by)+' 님':''} · 열어 보면 사라져요">NEW</span>` : ''; };
 function markSeen(id, quiet){ if(!id) return; SEEN[id] = Date.now(); seenSave(); if(!quiet) newsTabs(); }
 function markSeenMany(list){ const now = Date.now(); for(const r of list) SEEN[r.id] = now; seenSave(); newsTabs(); }
 function newsTabs(){
