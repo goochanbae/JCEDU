@@ -937,7 +937,8 @@ $('bellBtn').addEventListener('click', openNotifs);
 
 // ---------------- 새 소식 배지: 내가 마지막으로 열어 본 뒤 다른 사람이 등록·수정·댓글을 단 업무
 // 업무를 열면 확인 처리. 기록은 각자 브라우저에 저장 (처음 쓰는 날 이후의 변경부터 표시)
-let SEEN = {}, SEEN_BASE = 0, CMT_TIMES = {};
+let SEEN = {}, SEEN_BASE = 0, CMT_TIMES = {}, CMT_MINE = {};
+const MINE_NEW_MS = DAY;   // 내가 바꾼 업무는 24시간 동안 NEW (열어 봐도 유지)
 const ts = v => v ? new Date(v).getTime() : 0;
 function seenLoad(){
   SEEN = {}; SEEN_BASE = 0;
@@ -957,11 +958,14 @@ function newsOf(r){
   const n = (CMT_TIMES[r.id]||[]).filter(x=>x>t).length;
   if(n) return {kind:'cmt', label:`새 댓글 ${n}`};
   if(r.updated_by && r.updated_by!==me.name && ts(r.updated_at)>t) return {kind:'upd', label:'수정됨', by:r.updated_by};
+  const now = Date.now(), hm = v => new Date(v).toLocaleString('ko-KR',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'});
+  if(r.updated_by===me.name && now-ts(r.updated_at) < MINE_NEW_MS) return {kind:'mine', label:`내가 변경 · ${hm(r.updated_at)}`};
+  if(CMT_MINE[r.id] && now-CMT_MINE[r.id] < MINE_NEW_MS) return {kind:'mine', label:`내 댓글 · ${hm(CMT_MINE[r.id])}`};
   return null;
 }
 const cmtBtn = (r, always) => { const n = CMT_N[r.id]||0; return (n||always) ? `<button type="button" class="cmtbtn${n?'':' zero'}" data-cmt="${r.id}" title="${n?`댓글 ${n}개 보기·쓰기`:'댓글 쓰기'}"><i aria-hidden="true"></i>${n||'댓글'}</button>` : ''; };
 // 어떤 변화든 NEW 하나로 표시, 무엇이 바뀌었는지는 마우스를 올리면 보임
-const newsChip = r => { const x = newsOf(r); return x ? ` <span class="nb nb-new" title="${esc(x.label)}${x.by?' · '+esc(x.by)+' 님':''} · 열어 보면 사라져요">NEW</span>` : ''; };
+const newsChip = r => { const x = newsOf(r); return x ? ` <span class="nb nb-new" title="${esc(x.label)}${x.by?' · '+esc(x.by)+' 님':''} · ${x.kind==='mine'?'24시간 동안 표시':'열어 보면 사라져요'}">NEW</span>` : ''; };
 function markSeen(id, quiet){ if(!id) return; SEEN[id] = Date.now(); seenSave(); if(!quiet) newsTabs(); }
 function markSeenMany(list){ const now = Date.now(); for(const r of list) SEEN[r.id] = now; seenSave(); newsTabs(); }
 function newsTabs(){
@@ -974,8 +978,8 @@ function newsTabs(){
 }
 async function loadCommentTimes(){
   const { data, error } = await sb.from('item_comments').select('item_id,author,created_at').limit(10000);
-  CMT_N = {}; CMT_TIMES = {}; if(error) return;
-  for(const c of data){ CMT_N[c.item_id] = (CMT_N[c.item_id]||0)+1; if(c.author!==me.name) (CMT_TIMES[c.item_id] ||= []).push(ts(c.created_at)); }
+  CMT_N = {}; CMT_TIMES = {}; CMT_MINE = {}; if(error) return;
+  for(const c of data){ CMT_N[c.item_id] = (CMT_N[c.item_id]||0)+1; if(c.author!==me.name) (CMT_TIMES[c.item_id] ||= []).push(ts(c.created_at)); else CMT_MINE[c.item_id] = Math.max(CMT_MINE[c.item_id]||0, ts(c.created_at)); }
 }
 
 // ---------------- 댓글 · @멘션 (업무 상세 안). 멘션된 사람과 업무 담당자에게 알림
@@ -1047,7 +1051,7 @@ function bindComments(r){
     const { error } = await sb.from('item_comments').insert({item_id:r.id, author:me.name, body, mentions});
     btn.disabled = false;
     if(error){ toast('댓글을 등록하지 못했어요: '+error.message); return; }
-    ta.value=''; close(); await loadComments(r);
+    ta.value=''; close(); CMT_MINE[r.id] = Date.now(); await loadComments(r);
     if(mentions.length) toast(`${mentions.length>3?mentions.length+'명':mentions.join(', ')}에게 알림을 보냈어요.`);
   };
 }
@@ -1055,6 +1059,7 @@ function onCommentInsert(c){
   if(!me) return;
   CMT_N[c.item_id] = (CMT_N[c.item_id]||0) + 1;
   if(c.author!==me.name){ (CMT_TIMES[c.item_id] ||= []).push(ts(c.created_at)); if(selId===c.item_id) markSeen(c.item_id); }
+  else CMT_MINE[c.item_id] = Math.max(CMT_MINE[c.item_id]||0, ts(c.created_at));
   if(selId===c.item_id && byId[c.item_id] && $('d-cmts')) loadComments(byId[c.item_id]);
   if(c.author===me.name) return;
   const r = byId[c.item_id]; if(!r) return;
