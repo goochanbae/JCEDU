@@ -265,7 +265,7 @@ function renderTable(sheet, bodyOnly){
       const a2 = r.lvl==='P' ? groupAgg(r) : null;
       body += `<tr class="task lvl-${r.lvl}${r.id===selId?' sel':''}" data-id="${r.id}">
         <td class="mono">${r.id}</td><td class="mono" style="color:var(--muted)">${esc(r.num)}</td>
-        <td class="t-name"><span class="cat">${esc(r.cat||'')}${delChip(r)}${newsChip(r)}</span><span class="tk">${esc(r.task||'')}</span></td>
+        <td class="t-name"><span class="cat">${esc(r.cat||'')}${delChip(r)}${newsChip(r)}${cmtBtn(r,true)}</span><span class="tk">${esc(r.task||'')}</span></td>
         ${colOrder.map(k=>`<td class="${MOVABLE[k].cls||''}">${MOVABLE[k].cell(r,a2)}</td>`).join('')}</tr>`;
     }
   }
@@ -597,11 +597,11 @@ async function quickUpdate(r, patch){
 
 function myRow(r){
   const c = check(r), d = dday(r), ck = ckStat(r.id), ed = owns(r);
-  const sub = [r.brand, r.num && `${r.sheet==='REQ'?'REQ ':''}${r.num}`, d!=null && ddTxt(d), ck.n && `체크 ${ck.done}/${ck.n}`, CMT_N[r.id] && `댓글 ${CMT_N[r.id]}`].filter(Boolean).map(esc).join(' · ');
+  const sub = [r.brand, r.num && `${r.sheet==='REQ'?'REQ ':''}${r.num}`, d!=null && ddTxt(d), ck.n && `체크 ${ck.done}/${ck.n}`].filter(Boolean).map(esc).join(' · ');
   const seg = PROG_STEPS.map(p=>`<button type="button" data-pg="${p}" class="${r.prog!=null && Math.round(r.prog*100)>=p*100 && (p>0||r.prog===0)?'on':''}" ${ed&&!ck.n?'':'disabled'} title="${ck.n?'체크리스트로 자동 계산':Math.round(p*100)+'%'}">${Math.round(p*100)}</button>`).join('');
   return `<div class="mrow" data-row="${r.id}">
     <div class="mt"><button type="button" class="t" data-open="${r.id}">${esc(titleOf(r))}</button>${newsChip(r)}
-      <div class="sub">${sub}${c && c!=='진행' && c!=='예정' ? ' '+chkChip(c):''}${stale(r)?` <span class="chip k-warn">${ago(r.updated_at)} 업데이트</span>`:''}</div></div>
+      <div class="sub">${sub}${cmtBtn(r,true)}${c && c!=='진행' && c!=='예정' ? ' '+chkChip(c):''}${stale(r)?` <span class="chip k-warn">${ago(r.updated_at)} 업데이트</span>`:''}</div></div>
     <select data-st aria-label="진행 상태" ${ed?'':'disabled'}>${STATUS.map(s=>`<option value="${s}" ${s===r.st?'selected':''}>${ST_KO[s]}</option>`).join('')}${r.st?'':'<option value="" selected>상태 없음</option>'}</select>
     <div class="seg" role="group" aria-label="진척률">${seg}</div>
     <button type="button" class="iconbtn" data-memo aria-label="한 줄 메모" title="한 줄 메모" ${ed?'':'disabled'}>✎</button>
@@ -611,7 +611,7 @@ function myRow(r){
 function bCard(r){
   const d=dday(r), ck=ckStat(r.id);
   return `<div class="bcard" draggable="${owns(r)}" data-card="${r.id}"><button type="button" class="t" data-open="${r.id}">${esc(titleOf(r))}</button>${newsChip(r)}
-    <div class="sub">${[r.brand, d!=null&&ddTxt(d), r.prog!=null&&pct(r.prog), ck.n&&`체크 ${ck.done}/${ck.n}`, CMT_N[r.id]&&`댓글 ${CMT_N[r.id]}`].filter(Boolean).map(esc).join(' · ')} ${check(r)==='지연'?chkChip('지연'):''}</div></div>`;
+    <div class="sub">${[r.brand, d!=null&&ddTxt(d), r.prog!=null&&pct(r.prog), ck.n&&`체크 ${ck.done}/${ck.n}`].filter(Boolean).map(esc).join(' · ')} ${cmtBtn(r)}${check(r)==='지연'?chkChip('지연'):''}</div></div>`;
 }
 
 function renderMy(){
@@ -698,6 +698,7 @@ function myReport(){
 function bindMy(){
   const el = $('v-my');
   el.addEventListener('click', async e => {
+    const cb = e.target.closest('[data-cmt]'); if(cb){ openDrawer(cb.dataset.cmt,'cmt'); return; }
     const o = e.target.closest('[data-open]'); if(o){ openDrawer(o.dataset.open); return; }
     const fl = e.target.closest('[data-myf]'); if(fl){ ui.my.filter = ui.my.filter===fl.dataset.myf ? '' : fl.dataset.myf; if(ui.my.filter) ui.my.view='list'; renderMy(); return; }
     const vv = e.target.closest('[data-myv]'); if(vv){ ui.my.view = vv.dataset.myv; if(vv.dataset.myv==='board') ui.my.filter=''; try{localStorage.setItem('jcwbs-myview',ui.my.view);}catch(_){}; renderMy(); return; }
@@ -880,7 +881,7 @@ function pushNotif(x, live){
     toast(`${t}: ${titleOf(r)}`);
     if(document.hidden && 'Notification' in window && Notification.permission==='granted'){
       try{ const n = new Notification(t, {body:b, tag:'jcwbs-'+x.key});
-        n.onclick = () => { window.focus(); openDrawer(x.item); markRead(x.key); n.close(); }; }catch(e){}
+        n.onclick = () => { window.focus(); openDrawer(x.item, x.kind==='new'?'info':'cmt'); markRead(x.key); n.close(); }; }catch(e){}
     }
   }, x.kind==='new' && r0 && r0.cat==='새 업무' ? 15000 : 300);
 }
@@ -924,13 +925,13 @@ function openNotifs(){
         ${perm==='default'?'<button class="btn" type="button" id="nt-perm">바탕화면 알림 켜기</button>':''}
       </div>
       <p class="hist" style="margin:0">${perm==='granted'?'바탕화면 알림이 켜져 있어요. 다른 창을 보고 있을 때도 알려드려요.':perm==='denied'?'바탕화면 알림이 브라우저에서 차단돼 있어요. 주소창 왼쪽 자물쇠 아이콘 → 알림 허용으로 바꿀 수 있어요.':perm==='unsupported'?'이 브라우저는 바탕화면 알림을 지원하지 않아요.':'켜 두면 이 사이트를 띄워 둔 채 다른 창을 보고 있을 때도 알려드려요.'}</p>
-      <div class="side-list nlist">${list.map(x=>{ const r=byId[x.item]; return `<button type="button" data-nt="${esc(x.key)}" data-item="${x.item}" class="${x.read?'':'unread'}"><span>${x.read?'':'<i class="dot"></i>'}<em class="nk ${x.kind}">${N_LABEL[x.kind]||''}</em> ${esc(titleOf(r))}</span><span class="hist" style="display:inline">${x.text?`"${esc(x.text)}" · `:''}${esc(x.by)} · ${ago(x.at)}${x.kind==='new'?` · PIC ${esc(r.pic||'–')}${r.pic===me.name?' (나)':''}${r.parent&&/-INBOX$/.test(r.parent)?' · 미분류함':''}`:''}</span></button>`; }).join('') || '<div class="hist">아직 알림이 없어요. 새 업무 등록, 나를 언급한 댓글, 내 업무에 달린 댓글이 여기에 쌓여요.</div>'}</div>
+      <div class="side-list nlist">${list.map(x=>{ const r=byId[x.item]; return `<button type="button" data-nt="${esc(x.key)}" data-item="${x.item}" data-kind="${x.kind}" class="${x.read?'':'unread'}"><span>${x.read?'':'<i class="dot"></i>'}<em class="nk ${x.kind}">${N_LABEL[x.kind]||''}</em> ${esc(titleOf(r))}</span><span class="hist" style="display:inline">${x.text?`"${esc(x.text)}" · `:''}${esc(x.by)} · ${ago(x.at)}${x.kind==='new'?` · PIC ${esc(r.pic||'–')}${r.pic===me.name?' (나)':''}${r.parent&&/-INBOX$/.test(r.parent)?' · 미분류함':''}`:''}</span></button>`; }).join('') || '<div class="hist">아직 알림이 없어요. 새 업무 등록, 나를 언급한 댓글, 내 업무에 달린 댓글이 여기에 쌓여요.</div>'}</div>
     </div>`;
   drawer.classList.add('on'); scrim.classList.add('on');
   $('nt-close').onclick = closeDrawer;
   if($('nt-all')) $('nt-all').onclick = () => { NOTIFS.forEach(x=>x.read=true); nSave(); nBadge(); openNotifs(); };
   if($('nt-perm')) $('nt-perm').onclick = async () => { try{ await Notification.requestPermission(); }catch(e){} openNotifs(); };
-  drawer.querySelectorAll('[data-nt]').forEach(b => b.onclick = () => { markRead(b.dataset.nt); openDrawer(b.dataset.item); });
+  drawer.querySelectorAll('[data-nt]').forEach(b => b.onclick = () => { markRead(b.dataset.nt); openDrawer(b.dataset.item, b.dataset.kind==='new'?'info':'cmt'); });
 }
 $('bellBtn').addEventListener('click', openNotifs);
 
@@ -958,6 +959,7 @@ function newsOf(r){
   if(r.updated_by && r.updated_by!==me.name && ts(r.updated_at)>t) return {kind:'upd', label:'수정됨', by:r.updated_by};
   return null;
 }
+const cmtBtn = (r, always) => { const n = CMT_N[r.id]||0; return (n||always) ? `<button type="button" class="cmtbtn${n?'':' zero'}" data-cmt="${r.id}" title="${n?`댓글 ${n}개 보기·쓰기`:'댓글 쓰기'}"><i aria-hidden="true"></i>${n||'댓글'}</button>` : ''; };
 const newsChip = r => { const x = newsOf(r); return x ? ` <span class="nb nb-${x.kind}" title="${x.by?esc(x.by)+' 님이 수정 · ':''}열어 보면 사라져요">${x.label}</span>` : ''; };
 function markSeen(id, quiet){ if(!id) return; SEEN[id] = Date.now(); seenSave(); if(!quiet) newsTabs(); }
 function markSeenMany(list){ const now = Date.now(); for(const r of list) SEEN[r.id] = now; seenSave(); newsTabs(); }
@@ -986,18 +988,20 @@ function richText(t){
 }
 const mentionsIn = t => { const out = new Set(); for(const s of STAFF) if(s.active && t.includes('@'+s.name)) out.add(s.name); if(t.includes('@전원')) STAFF.filter(s=>s.active).forEach(s=>out.add(s.name)); return [...out]; };
 function commentsHtml(r){
-  return `<div class="subhead">댓글 <span class="hist" style="display:inline;font-weight:400" id="d-cn"></span></div>
-    <div class="cmts" id="d-cmts"><div class="hist">불러오는 중…</div></div>
-    ${canEdit()?`<form class="cmt-form" id="d-cform" autocomplete="off">
-      <div class="cmt-wrap"><textarea id="d-cbody" maxlength="2000" placeholder="@이름으로 알림 보내기 · 링크(https://…)는 자동 연결 · Ctrl+Enter 등록" aria-label="댓글 입력"></textarea><div class="mention-box hidden" id="d-mbox" role="listbox"></div></div>
-      <button class="btn primary" type="submit">댓글 등록</button></form>`:''}`;
+  return `<div class="cmts" id="d-cmts"><div class="hist">불러오는 중…</div></div>`;
+}
+function composerHtml(){
+  return canEdit() ? `<form class="cmt-form" id="d-cform" autocomplete="off">
+      <div class="cmt-wrap"><textarea id="d-cbody" maxlength="2000" rows="2" placeholder="댓글 입력 · @이름으로 알림 · Ctrl+Enter 등록" aria-label="댓글 입력"></textarea><div class="mention-box hidden" id="d-mbox" role="listbox"></div></div>
+      <button class="btn primary" type="submit">등록</button></form>` : '<div class="hist" style="flex:1">보기 전용 계정은 댓글을 달 수 없어요.</div>';
 }
 async function loadComments(r){
   const { data, error } = await sb.from('item_comments').select('*').eq('item_id',r.id).order('created_at');
   const box = $('d-cmts'); if(!box || selId!==r.id) return;
   if(error){ box.innerHTML='<div class="hist">댓글을 불러오지 못했어요.</div>'; return; }
-  CMT_N[r.id] = data.length; $('d-cn').textContent = data.length?data.length+'개':'';
-  box.innerHTML = data.length ? data.map(c=>`<div class="cmt" data-cid="${c.id}"><div class="cmt-h"><b>${esc(c.author)}</b><span>${new Date(c.created_at).toLocaleString('ko-KR',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'})}</span>${(c.author===me.name||me.role==='admin')?'<button type="button" class="linkbtn" data-cdel>삭제</button>':''}</div><div class="cmt-b">${richText(c.body)}</div></div>`).join('') : '<div class="hist">첫 댓글을 남겨 보세요. 진행 상황 공유, 질문, 산출물 링크 등.</div>';
+  CMT_N[r.id] = data.length; const cn=$('d-cn'); if(cn) cn.textContent = data.length||'';
+  box.innerHTML = data.length ? data.map(c=>`<div class="cmt" data-cid="${c.id}"><div class="cmt-h"><b>${esc(c.author)}</b><span>${new Date(c.created_at).toLocaleString('ko-KR',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'})}</span>${(c.author===me.name||me.role==='admin')?'<button type="button" class="linkbtn" data-cdel>삭제</button>':''}</div><div class="cmt-b">${richText(c.body)}</div></div>`).join('') : '<div class="cmt-empty">아직 댓글이 없어요.<br>진행 상황, 질문, 산출물 링크를 남겨 보세요.</div>';
+  if(drawerTab==='cmt'){ const bd=drawer.querySelector('.body'); if(bd) bd.scrollTop = bd.scrollHeight; }
 }
 function bindComments(r){
   const box=$('d-cmts'); if(!box) return;
@@ -1061,8 +1065,15 @@ function onCommentInsert(c){
 
 // ---------------- drawer (상세·편집)
 const drawer=$('drawer'), scrim=$('scrim');
-async function openDrawer(id){
-  const r=byId[id]; if(!r) return; selId=id; markSeen(id);
+let drawerTab='info', drawerTabFor=null;
+async function openDrawer(id, tab){
+  const r=byId[id]; if(!r) return;
+  const nw = newsOf(r);
+  if(tab) drawerTab = tab;
+  else if(drawerTabFor!==id) drawerTab = (nw && nw.kind==='cmt') ? 'cmt' : 'info';
+  if(r.lvl==='L1' && drawerTab==='cmt') drawerTab='info';
+  drawerTabFor = id;
+  selId=id; markSeen(id);
   const ro = !owns(r);
   const ck = ckStat(r.id);
   const opt=(arr,v,labels)=>`<option value=""></option>`+arr.map((x,i)=>`<option value="${esc(x)}" ${x===v?'selected':''}>${esc(labels?labels[i]:x)}</option>`).join('');
@@ -1085,7 +1096,13 @@ async function openDrawer(id){
   const grp = r.lvl==='L1';
   drawer.innerHTML = `
     <header><div style="flex:1"><div class="id">${grp?'카테고리':r.id} · ${r.sheet==='WBS'?'WBS':'대표님 REQ'} · ${esc(r.num)}</div><h3>${esc(r.cat||'')}</h3>${r.updated_by?`<div class="id" style="margin-top:4px">마지막 수정 ${esc(r.updated_by)} · ${new Date(r.updated_at).toLocaleString('ko-KR',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'})}</div>`:''}</div><button class="btn" type="button" id="d-close">닫기</button></header>
+    <nav class="dtabs" role="tablist">
+      <button type="button" role="tab" data-dt="info">상세</button>
+      ${grp?'':`<button type="button" role="tab" data-dt="cmt">댓글 <span class="dn-c" id="d-cn">${CMT_N[r.id]||''}</span></button>`}
+      <button type="button" role="tab" data-dt="hist">변경 이력</button>
+    </nav>
     <div class="body">
+      <div class="dpane" data-pane="info">
       ${r.delete_requested_at?`<div class="calc"><div style="background:var(--bad-soft);color:var(--bad)">삭제 대기 · ${esc(r.delete_requested_by||'')} 요청 · ${new Date(r.delete_requested_at).toLocaleString('ko-KR',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'})}${me.role==='admin'?' · 아래에서 승인하거나 반려하세요':' · 관리자 승인 후 삭제됩니다'}</div></div>`:''}
       ${ro && canEdit()?`<div class="calc"><div style="background:var(--hold-soft)">${grp?'카테고리는 관리자나 만든 사람만 고칠 수 있어요.':`보기 전용이에요. 담당자(PIC·Backup)나 등록한 사람${r.created_by?`(${esc(r.created_by)})`:''}만 수정할 수 있어요.`}</div></div>`:''}
       ${isTask(r)?`<div class="calc"><div>D-day <b>${ddTxt(d)||'–'}</b></div><div>일정 체크 ${chkChip(c)||'–'}</div><div>오늘까지 계획 <b>${pct(m)}</b></div></div>`:''}
@@ -1111,10 +1128,22 @@ async function openDrawer(id){
         <div class="field full"><label for="f-note">비고</label><textarea id="f-note">${esc(r.note||'')}</textarea></div>`}
       </div>${kpi}${req}</fieldset>
       ${!grp && canEdit() && r.lvl!=='C' ? `<button class="addbtn" type="button" id="d-addchild" style="align-self:flex-start;margin:0">+ 이 업무 아래에 하위 업무 추가</button>`:''}
-      ${grp?'':commentsHtml(r)}
-      <div class="subhead">변경 이력</div><div class="hist" id="d-hist"><div>불러오는 중…</div></div>
+      </div>
+      ${grp?'':`<div class="dpane" data-pane="cmt">${commentsHtml(r)}</div>`}
+      <div class="dpane" data-pane="hist"><div class="hist" id="d-hist"><div>불러오는 중…</div></div></div>
     </div>
-    <footer>${delButtons(r)}<button class="btn" type="button" id="d-cancel">${ro?'닫기':'취소'}</button>${ro?'':'<button class="btn primary" type="button" id="d-save">저장</button>'}</footer>`;
+    <footer class="dfoot" data-foot="info">${delButtons(r)}<button class="btn" type="button" id="d-cancel">${ro?'닫기':'취소'}</button>${ro?'':'<button class="btn primary" type="button" id="d-save">저장</button>'}</footer>
+    ${grp?'':`<footer class="dfoot cmt-foot" data-foot="cmt">${composerHtml()}</footer>`}`;
+  const setTab = t => {
+    drawerTab = t;
+    drawer.querySelectorAll('[data-dt]').forEach(b=>{ b.classList.toggle('on', b.dataset.dt===t); b.setAttribute('aria-selected', b.dataset.dt===t); });
+    drawer.querySelectorAll('[data-pane]').forEach(p=>p.hidden = p.dataset.pane!==t);
+    drawer.querySelectorAll('[data-foot]').forEach(f=>f.hidden = !(f.dataset.foot===t || (t==='hist' && f.dataset.foot==='info')));
+    const bd = drawer.querySelector('.body');
+    if(t==='cmt'){ bd.scrollTop = bd.scrollHeight; const ta=$('d-cbody'); if(ta) setTimeout(()=>ta.focus(), 30); } else bd.scrollTop = 0;
+  };
+  drawer.querySelectorAll('[data-dt]').forEach(b=>b.onclick=()=>setTab(b.dataset.dt));
+  setTab(drawerTab);
   drawer.classList.add('on'); scrim.classList.add('on');
   $('d-close').onclick=closeDrawer; $('d-cancel').onclick=closeDrawer;
   if($('d-save')) $('d-save').onclick=()=>saveDrawer(r);
@@ -1469,6 +1498,7 @@ function rerender(){
 }
 window.addEventListener('hashchange',()=>{ if(location.hash.includes('access_token')) return; rerender(); });
 document.querySelector('main').addEventListener('click',e=>{
+  const cb=e.target.closest('[data-cmt]'); if(cb){ e.stopPropagation(); openDrawer(cb.dataset.cmt,'cmt'); return; }
   const add=e.target.closest('[data-add]'); if(add){ e.stopPropagation(); addItem(add.dataset.add); return; }
   const ed=e.target.closest('[data-edit]'); if(ed){ e.stopPropagation(); openDrawer(ed.dataset.edit); return; }
   const go=e.target.closest('[data-go]');

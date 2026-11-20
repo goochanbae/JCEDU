@@ -434,3 +434,25 @@ tr.task:hover td{background:var(--surface-soft)}
 .newc[hidden]{display:none}
 .nb-dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--mint);box-shadow:0 0 0 1px #000;margin-right:5px;vertical-align:1px}
 .news-on{font-weight:700}
+
+/* 상세 창 탭 · 댓글 */
+.dtabs{display:flex;gap:4px;padding:0 20px;border-bottom:1px solid var(--line)}
+.dtabs button{border:0;background:none;padding:10px 12px;font-weight:600;color:var(--muted);border-bottom:3px solid transparent;display:inline-flex;align-items:center;gap:5px}
+.dtabs button:hover{color:var(--ink)}
+.dtabs button.on{color:var(--ink);border-color:var(--mint)}
+.dn-c{background:#000;color:var(--mint);border-radius:999px;font-size:10px;font-weight:800;padding:1px 6px}
+.dn-c:empty{display:none}
+.dpane[hidden],.dfoot[hidden]{display:none!important}
+.dpane{display:flex;flex-direction:column;gap:12px}
+.cmt-foot{padding:12px 16px;justify-content:stretch;background:var(--surface)}
+.cmt-foot .cmt-form{flex-direction:row;align-items:flex-end;width:100%;gap:8px}
+.cmt-foot .cmt-wrap{flex:1}
+.cmt-foot textarea{min-height:44px;max-height:180px}
+.cmt-foot .mention-box{top:auto;bottom:100%;margin-bottom:6px}
+.cmt-empty{text-align:center;color:var(--muted);padding:40px 10px;line-height:1.7}
+.cmt-b{font-size:13.5px}
+.cmtbtn{display:inline-flex;align-items:center;gap:4px;border:1px solid var(--line);background:var(--surface);border-radius:999px;font-size:11px;font-weight:700;padding:1px 8px 1px 6px;margin-left:6px;vertical-align:1px;color:var(--ink);cursor:pointer;line-height:1.5}
+.cmtbtn i{width:12px;height:10px;border:1.6px solid currentColor;border-radius:4px 4px 4px 1px;display:inline-block}
+.cmtbtn:hover{border-color:var(--ink);background:var(--accent-soft)}
+.cmtbtn.zero{color:var(--muted);font-weight:600;border-color:transparent;background:transparent}
+tr.task:hover .cmtbtn.zero,.mrow:hover .cmtbtn.zero{border-color:var(--line);background:var(--surface)}
