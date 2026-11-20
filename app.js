@@ -144,7 +144,7 @@ async function enter(session){
   await Promise.all([loadChecks(), loadCommentTimes()]);
   seenLoad();
   subscribe();
-  await loadMissed();
+  await loadFeed();
   rerender();
   rerender();
 }
@@ -178,12 +178,12 @@ function subscribe(){
     if(p.eventType==='DELETE'){ items = items.filter(r=>r.id!==p.old.id); }
     else { const n = norm(p.new); const i = items.findIndex(r=>r.id===n.id); if(i>=0) items[i]=n; else items.push(n); }
     index(); refreshPeople();
-    if(p.eventType==='INSERT') onItemInsert(byId[p.new.id]);
     if(selId && p.new && p.new.id===selId) markSeen(selId, true);
     newsTabs();
     if(selId && p.new && p.new.id===selId && p.new.updated_by!==me.name) toast(`${p.new.updated_by||'다른 팀원'}님이 이 업무를 방금 수정했습니다.`);
     if(!$('drawer').classList.contains('on')) rerender();
   }).on('postgres_changes', {event:'INSERT', schema:'public', table:'item_comments'}, p => onCommentInsert(p.new))
+  .on('postgres_changes', {event:'INSERT', schema:'public', table:'item_history'}, p => { addFeed(fromHistory(p.new), true); if(!$('drawer').classList.contains('on')) rerender(); else newsTabs(); })
   .subscribe(st => { const el=$('syncState'); el.textContent = st==='SUBSCRIBED'?'실시간 반영 중':'연결 중'; el.classList.toggle('live', st==='SUBSCRIBED'); });
 }
 
@@ -851,87 +851,133 @@ function bindChecks(r){
   };
 }
 
-// ---------------- 알림: 새 업무 등록 · 나를 멘션한 댓글 · 내 업무에 달린 댓글 (실시간)
-// 접속하지 않았던 동안 생긴 알림은 다음 로그인 때 모아 보여줌. 알림 목록은 각자 브라우저에 저장
-let NOTIFS = [];
+// ---------------- 알림 = 모든 변경 사항 피드 (변경 이력 + 댓글). 분류별로 걸러 보기
+// 출처: item_history(등록·수정·이동·삭제·체크리스트 등 모든 기록) + item_comments(댓글·멘션). 최근 30일
+// 읽음 상태는 각자 브라우저에 저장. 내가 한 변경은 목록에는 보이되 안 읽은 숫자에는 넣지 않음
+let FEED = [], READ = {before:0, keys:{}}, feedFilter = {cat:'all', mineOnly:false, hideMine:false};
 const nKey = k => `jcwbs-${k}-${(me&&me.email||'').toLowerCase()}`;
-const N_LABEL = {new:'새 업무', mention:'멘션', comment:'댓글'};
-function nSave(){ try{ localStorage.setItem(nKey('notifs'), JSON.stringify(NOTIFS.slice(0,80))); }catch(e){} }
-function nLoad(){ try{ NOTIFS = JSON.parse(localStorage.getItem(nKey('notifs'))||'[]').map(x=>({kind:'new', key:'n'+x.item, ...x})); }catch(e){ NOTIFS=[]; } }
+const CATS = [
+  ['all','전체'], ['mention','멘션'], ['comment','댓글'], ['new','새 업무'], ['prog','상태·진척'],
+  ['sched','일정'], ['edit','내용 수정'], ['move','이동'], ['del','삭제'], ['admin','회원·담당자']
+];
+const CAT_KO = Object.fromEntries(CATS);
+function catsOfHistory(h){
+  if(h.item_id==='MEMBER' || h.item_id==='STAFF') return ['admin'];
+  const t = h.changes||'', out = new Set();
+  if(/^(업무 등록|업무 추가|카테고리 추가)/.test(t)) out.add('new');
+  if(/진행 상태|progress|체크리스트/.test(t)) out.add('prog');
+  if(/(^|\/ )(Start|End):|마일스톤/.test(t)) out.add('sched');
+  if(/상위 항목 이동/.test(t)) out.add('move');
+  if(/(^|\/ )삭제|삭제 요청|삭제 반려|삭제 요청 취소/.test(t) && !/체크리스트 삭제/.test(t)) out.add('del');
+  // 위에 해당하지 않는 필드 변경(업무명·내용·담당자·메모·비고·링크 등)
+  const parts = t.split(' / ').filter(p=>!/^(진행 상태|progress|체크리스트|Start|End|마일스톤|상위 항목 이동|업무 등록|업무 추가|카테고리 추가|삭제)/.test(p));
+  if(parts.length || !out.size) out.add('edit');
+  return [...out];
+}
+const fromHistory = h => ({key:'h'+(h.id||h.item_id+h.changed_at), src:'h', cats:catsOfHistory(h), item:h.item_id, by:h.changed_by, at:ts(h.changed_at), text:h.changes});
+function fromComment(c){
+  const cats = ['comment']; if(me && (c.mentions||[]).includes(me.name)) cats.unshift('mention');
+  return {key:'c'+c.id, src:'c', cats, item:c.item_id, by:c.author, at:ts(c.created_at), text:c.body};
+}
+function readLoad(){
+  READ = {before:0, keys:{}};
+  try{ const o = JSON.parse(localStorage.getItem(nKey('read'))||'null'); if(o) READ = {before:o.before||0, keys:o.keys||{}}; }catch(e){}
+  if(!READ.before){ READ.before = Date.now()-DAY; readSave(); }   // 처음 쓰는 사람은 최근 하루치만 안 읽음으로
+}
+function readSave(){
+  for(const k in READ.keys) if(READ.keys[k] < READ.before) delete READ.keys[k];
+  try{ localStorage.setItem(nKey('read'), JSON.stringify(READ)); }catch(e){}
+}
+const isRead = e => e.by===me.name || e.at<=READ.before || !!READ.keys[e.key];
+const myItem = id => { const r = byId[id]; return !!r && (r.pic===me.name || r.bak===me.name || r.created_by===me.name); };
+function markRead(key){ if(!READ.keys[key]){ READ.keys[key] = Date.now(); readSave(); nBadge(); } }
+function markItemRead(id){ let ch=false; for(const e of FEED) if(e.item===id && !isRead(e)){ READ.keys[e.key]=Date.now(); ch=true; } if(ch){ readSave(); nBadge(); } }
 function nBadge(){
-  const n = NOTIFS.filter(x=>!x.read).length, b=$('bellN');
+  const n = FEED.filter(e=>!isRead(e) && (e.cats[0]!=='admin' || me.role==='admin')).length, b=$('bellN');
   b.textContent = n>99?'99+':n; b.classList.toggle('hidden', !n);
   $('bellBtn').setAttribute('aria-label', n?`알림 ${n}건 읽지 않음`:'알림');
 }
-function nMsg(x, r){
-  if(x.kind==='mention') return [`${x.by} 님이 나를 언급했어요`, `${titleOf(r)} · "${x.text||''}"`];
-  if(x.kind==='comment') return [`내 업무에 ${x.by} 님의 댓글`, `${titleOf(r)} · "${x.text||''}"`];
-  return [r.pic===me.name?'나에게 새 업무가 배정됐어요':'새 업무가 등록됐어요', `${titleOf(r)} · ${x.by}`];
-}
-function pushNotif(x, live){
-  if(NOTIFS.some(n=>n.key===x.key)) return;
-  NOTIFS.unshift({...x, read:false}); nSave(); nBadge();
-  if(current()==='my') rerender();
-  if(!live) return;
-  // 표에서 '+ 업무 추가'로 만든 직후엔 이름이 '새 업무'라서, 잠시 뒤 실제 이름으로 알림
-  const r0 = byId[x.item];
-  setTimeout(()=>{
-    const r = byId[x.item]; if(!r) return;
-    const [t, b] = nMsg(x, r);
-    toast(`${t}: ${titleOf(r)}`);
-    if(document.hidden && 'Notification' in window && Notification.permission==='granted'){
-      try{ const n = new Notification(t, {body:b, tag:'jcwbs-'+x.key});
-        n.onclick = () => { window.focus(); openDrawer(x.item, x.kind==='new'?'info':'cmt'); markRead(x.key); n.close(); }; }catch(e){}
-    }
-  }, x.kind==='new' && r0 && r0.cat==='새 업무' ? 15000 : 300);
-}
-function markRead(key){ const x=NOTIFS.find(n=>n.key===key); if(x && !x.read){ x.read=true; nSave(); nBadge(); } }
-function onItemInsert(r){
-  if(!me || !r || r.lvl==='L1') return;
-  const by = r.created_by || r.updated_by;
-  if(!by || by===me.name) return;
-  pushNotif({key:'n'+r.id, kind:'new', item:r.id, by, at:r.updated_at || new Date().toISOString()}, true);
-}
-async function loadMissed(){
-  nLoad();
-  let last; try{ last = localStorage.getItem(nKey('seen')); }catch(e){}
-  const since = last || new Date(Date.now()-3*DAY).toISOString();   // 처음 쓰는 사람은 최근 3일치
-  const [{ data:hs }, { data:cs }] = await Promise.all([
-    sb.from('item_history').select('item_id,changed_at,changed_by,changes').like('changes','업무 %').neq('changed_by',me.name).gt('changed_at',since).order('changed_at',{ascending:true}).limit(100),
-    sb.from('item_comments').select('*').neq('author',me.name).gt('created_at',since).order('created_at',{ascending:true}).limit(200)
-  ]);
-  for(const h of hs||[]) if(/^업무 (등록|추가) /.test(h.changes) && byId[h.item_id]) pushNotif({key:'n'+h.item_id, kind:'new', item:h.item_id, by:h.changed_by, at:h.changed_at}, false);
-  for(const c of cs||[]){
-    const r = byId[c.item_id]; if(!r) continue;
-    const mentioned = (c.mentions||[]).includes(me.name), mine = r.pic===me.name || r.bak===me.name || r.created_by===me.name;
-    if(mentioned || mine) pushNotif({key:'c'+c.id, kind:mentioned?'mention':'comment', item:c.item_id, by:c.author, at:c.created_at, text:c.body.slice(0,80)}, false);
-  }
-  try{ localStorage.setItem(nKey('seen'), new Date().toISOString()); }catch(e){}
+function addFeed(e, live){
+  if(FEED.some(x=>x.key===e.key)) return;
+  FEED.unshift(e); FEED.sort((a,b)=>b.at-a.at); if(FEED.length>1500) FEED.length = 1500;
   nBadge();
-  const missed = NOTIFS.filter(x=>!x.read && x.at>since).length;
-  if(missed) toast(`접속하지 않은 동안 알림 ${missed}건이 쌓였어요. 오른쪽 위 알림에서 확인하세요.`);
+  if($('drawer').classList.contains('on') && $('nt-list')) renderFeedList();
+  if(!live || e.by===me.name) return;
+  // 화면 아래 알림 + 바탕화면 알림: 멘션 · 내 업무 관련 · 새 업무 · 삭제
+  const r = byId[e.item];
+  const important = e.cats.includes('mention') || e.cats.includes('new') || myItem(e.item) || e.cats.includes('del');
+  if(!important) return;
+  setTimeout(()=>{
+    const rr = byId[e.item]||r, title = rr ? titleOf(rr) : e.item;
+    const head = e.cats.includes('mention') ? `${e.by} 님이 나를 언급했어요` : e.cats.includes('comment') ? `${e.by} 님의 댓글` : e.cats.includes('new') ? `${e.by} 님이 새 업무를 등록했어요` : myItem(e.item) ? `${e.by} 님이 내 업무를 변경했어요` : `${e.by} 님의 변경`;
+    toast(`${head}: ${title}`);
+    if(document.hidden && 'Notification' in window && Notification.permission==='granted'){
+      try{ const n = new Notification(head, {body:`${title} · ${String(e.text).slice(0,80)}`, tag:'jcwbs-'+e.key});
+        n.onclick = () => { window.focus(); if(byId[e.item]) openDrawer(e.item, e.src==='c'?'cmt':'info'); markRead(e.key); n.close(); }; }catch(_){}
+    }
+  }, e.cats.includes('new') && r && r.cat==='새 업무' ? 15000 : 300);
 }
-// 접속 중에는 마지막 확인 시각을 계속 갱신 (다음 로그인 때 중복 알림 방지)
-setInterval(()=>{ if(me) try{ localStorage.setItem(nKey('seen'), new Date().toISOString()); }catch(e){} }, 60000);
+async function loadFeed(){
+  readLoad();
+  const since = new Date(Date.now()-30*DAY).toISOString();
+  const [{ data:hs }, { data:cs }] = await Promise.all([
+    sb.from('item_history').select('id,item_id,changed_at,changed_by,changes').gt('changed_at',since).order('changed_at',{ascending:false}).limit(1200),
+    sb.from('item_comments').select('id,item_id,author,body,mentions,created_at').gt('created_at',since).order('created_at',{ascending:false}).limit(500)
+  ]);
+  FEED = [...(hs||[]).map(fromHistory), ...(cs||[]).map(fromComment)].sort((a,b)=>b.at-a.at);
+  nBadge();
+  const unread = FEED.filter(e=>!isRead(e) && (e.cats[0]!=='admin' || me.role==='admin')).length;
+  if(unread) toast(`안 읽은 알림 ${unread}건이 있어요. 오른쪽 위 알림에서 분류별로 확인하세요.`);
+}
+function feedVisible(e){
+  if(e.cats.includes('admin') && me.role!=='admin') return false;
+  if(feedFilter.hideMine && e.by===me.name) return false;
+  if(feedFilter.mineOnly && !myItem(e.item)) return false;
+  return true;
+}
 function openNotifs(){
   selId=null;
   const perm = 'Notification' in window ? Notification.permission : 'unsupported';
-  const list = NOTIFS.filter(x=>byId[x.item]);
   drawer.innerHTML = `
-    <header><div style="flex:1"><div class="id">새 업무 · 멘션 · 내 업무 댓글</div><h3>알림</h3></div><button class="btn" type="button" id="nt-close">닫기</button></header>
-    <div class="body">
-      <div style="display:flex;gap:8px;flex-wrap:wrap">
-        ${list.some(x=>!x.read)?'<button class="btn" type="button" id="nt-all">모두 읽음</button>':''}
-        ${perm==='default'?'<button class="btn" type="button" id="nt-perm">바탕화면 알림 켜기</button>':''}
-      </div>
-      <p class="hist" style="margin:0">${perm==='granted'?'바탕화면 알림이 켜져 있어요. 다른 창을 보고 있을 때도 알려드려요.':perm==='denied'?'바탕화면 알림이 브라우저에서 차단돼 있어요. 주소창 왼쪽 자물쇠 아이콘 → 알림 허용으로 바꿀 수 있어요.':perm==='unsupported'?'이 브라우저는 바탕화면 알림을 지원하지 않아요.':'켜 두면 이 사이트를 띄워 둔 채 다른 창을 보고 있을 때도 알려드려요.'}</p>
-      <div class="side-list nlist">${list.map(x=>{ const r=byId[x.item]; return `<button type="button" data-nt="${esc(x.key)}" data-item="${x.item}" data-kind="${x.kind}" class="${x.read?'':'unread'}"><span>${x.read?'':'<i class="dot"></i>'}<em class="nk ${x.kind}">${N_LABEL[x.kind]||''}</em> ${esc(titleOf(r))}</span><span class="hist" style="display:inline">${x.text?`"${esc(x.text)}" · `:''}${esc(x.by)} · ${ago(x.at)}${x.kind==='new'?` · PIC ${esc(r.pic||'–')}${r.pic===me.name?' (나)':''}${r.parent&&/-INBOX$/.test(r.parent)?' · 미분류함':''}`:''}</span></button>`; }).join('') || '<div class="hist">아직 알림이 없어요. 새 업무 등록, 나를 언급한 댓글, 내 업무에 달린 댓글이 여기에 쌓여요.</div>'}</div>
-    </div>`;
+    <header><div style="flex:1"><div class="id">최근 30일 · 모든 변경 사항</div><h3>알림</h3></div><button class="btn" type="button" id="nt-close">닫기</button></header>
+    <div class="nt-cats" id="nt-cats" role="tablist" aria-label="알림 분류"></div>
+    <div class="nt-opts">
+      <label class="chk-inline"><input type="checkbox" id="nt-mine" ${feedFilter.mineOnly?'checked':''}> 내 업무만</label>
+      <label class="chk-inline"><input type="checkbox" id="nt-hide" ${feedFilter.hideMine?'checked':''}> 내 변경 숨기기</label>
+      <div class="spacer"></div>
+      <button class="linkbtn" type="button" id="nt-all">이 분류 모두 읽음</button>
+      ${perm==='default'?'<button class="linkbtn" type="button" id="nt-perm">바탕화면 알림 켜기</button>':''}
+    </div>
+    <div class="body" style="padding-top:8px"><div id="nt-list"></div></div>`;
   drawer.classList.add('on'); scrim.classList.add('on');
   $('nt-close').onclick = closeDrawer;
-  if($('nt-all')) $('nt-all').onclick = () => { NOTIFS.forEach(x=>x.read=true); nSave(); nBadge(); openNotifs(); };
+  $('nt-mine').onchange = e => { feedFilter.mineOnly = e.target.checked; renderFeedList(); };
+  $('nt-hide').onchange = e => { feedFilter.hideMine = e.target.checked; renderFeedList(); };
+  $('nt-all').onclick = () => { const now=Date.now(); for(const e of FEED) if(feedVisible(e) && (feedFilter.cat==='all' || e.cats.includes(feedFilter.cat)) && !isRead(e)) READ.keys[e.key]=now; readSave(); nBadge(); renderFeedList(); };
   if($('nt-perm')) $('nt-perm').onclick = async () => { try{ await Notification.requestPermission(); }catch(e){} openNotifs(); };
-  drawer.querySelectorAll('[data-nt]').forEach(b => b.onclick = () => { markRead(b.dataset.nt); openDrawer(b.dataset.item, b.dataset.kind==='new'?'info':'cmt'); });
+  renderFeedList();
+}
+function renderFeedList(){
+  const box = $('nt-list'), cbox = $('nt-cats'); if(!box) return;
+  const base = FEED.filter(feedVisible);
+  const cnt = c => base.filter(e=>(c==='all'||e.cats.includes(c)) && !isRead(e)).length;
+  const tot = c => base.filter(e=>c==='all'||e.cats.includes(c)).length;
+  cbox.innerHTML = CATS.filter(([c])=>c!=='admin' || me.role==='admin').map(([c,l])=>{ const u=cnt(c), t=tot(c); return `<button type="button" role="tab" data-fc="${c}" class="${feedFilter.cat===c?'on':''} ${t?'':'empty'}" aria-selected="${feedFilter.cat===c}">${l}${u?` <b>${u}</b>`:t?` <span>${t}</span>`:''}</button>`; }).join('');
+  cbox.querySelectorAll('[data-fc]').forEach(b=>b.onclick=()=>{ feedFilter.cat=b.dataset.fc; renderFeedList(); });
+  const list = base.filter(e=>feedFilter.cat==='all' || e.cats.includes(feedFilter.cat)).slice(0,300);
+  const day = t => { const d=new Date(t); d.setHours(0,0,0,0); const diff=Math.round((today-d)/DAY); return diff===0?'오늘':diff===1?'어제':`${d.getMonth()+1}월 ${d.getDate()}일 (${'일월화수목금토'[d.getDay()]})`; };
+  let html='', last='';
+  for(const e of list){
+    const g = day(e.at); if(g!==last){ html += `<div class="nt-day">${g}</div>`; last=g; }
+    const r = byId[e.item], rd = isRead(e);
+    const title = r ? titleOf(r) : (e.cats.includes('admin') ? (e.item==='MEMBER'?'회원 관리':'담당자 관리') : `${e.item} (삭제된 업무)`);
+    html += `<button type="button" class="nt-item ${rd?'':'unread'}" data-k="${esc(e.key)}" data-item="${esc(e.item)}" data-src="${e.src}" ${r?'':'data-noopen="1"'}>
+      <div class="nt-top">${rd?'':'<i class="dot"></i>'}${e.cats.map(c=>`<em class="nk ${c}">${CAT_KO[c]}</em>`).join('')}<span class="nt-t">${esc(title)}</span>${r&&myItem(e.item)?'<span class="nt-mine">내 업무</span>':''}</div>
+      <div class="nt-txt">${e.src==='c'?richText(String(e.text).slice(0,200)):esc(String(e.text).slice(0,200))}</div>
+      <div class="nt-meta">${esc(e.by)}${e.by===me.name?' (나)':''} · ${new Date(e.at).toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'})}</div></button>`;
+  }
+  box.innerHTML = html || `<div class="cmt-empty">${feedFilter.cat==='all'?'최근 30일 동안 변경 사항이 없어요.':`'${CAT_KO[feedFilter.cat]}' 알림이 없어요.`}</div>`;
+  box.querySelectorAll('[data-k]').forEach(b=>b.onclick=()=>{ markRead(b.dataset.k); if(b.dataset.noopen){ renderFeedList(); return; } openDrawer(b.dataset.item, b.dataset.src==='c'?'cmt':(b.dataset.src==='h'?'hist':'info')); });
 }
 $('bellBtn').addEventListener('click', openNotifs);
 
@@ -954,7 +1000,7 @@ const seenAt = id => Math.max(SEEN[id]||0, SEEN_BASE);
 function newsOf(r){
   if(!r || !me) return null;
   const t = seenAt(r.id);
-  if(NOTIFS.some(x=>x.kind==='new' && x.item===r.id && ts(x.at)>t)) return {kind:'new', label:'새 업무'};
+  if(FEED.some(x=>x.item===r.id && x.by!==me.name && x.cats.includes('new') && x.at>t)) return {kind:'new', label:'새 업무'};
   const n = (CMT_TIMES[r.id]||[]).filter(x=>x>t).length;
   if(n) return {kind:'cmt', label:`새 댓글 ${n}`};
   if(r.updated_by && r.updated_by!==me.name && ts(r.updated_at)>t) return {kind:'upd', label:'수정됨', by:r.updated_by};
@@ -1061,11 +1107,8 @@ function onCommentInsert(c){
   if(c.author!==me.name){ (CMT_TIMES[c.item_id] ||= []).push(ts(c.created_at)); if(selId===c.item_id) markSeen(c.item_id); }
   else CMT_MINE[c.item_id] = Math.max(CMT_MINE[c.item_id]||0, ts(c.created_at));
   if(selId===c.item_id && byId[c.item_id] && $('d-cmts')) loadComments(byId[c.item_id]);
+  addFeed(fromComment(c), true);
   if(c.author===me.name) return;
-  const r = byId[c.item_id]; if(!r) return;
-  const mentioned = (c.mentions||[]).includes(me.name);
-  const mine = r.pic===me.name || r.bak===me.name || r.created_by===me.name;
-  if(mentioned || mine) pushNotif({key:'c'+c.id, kind:mentioned?'mention':'comment', item:c.item_id, by:c.author, at:c.created_at, text:c.body.slice(0,80)}, true);
   if(!$('drawer').classList.contains('on')) rerender(); else newsTabs();
 }
 
@@ -1079,7 +1122,7 @@ async function openDrawer(id, tab){
   else if(drawerTabFor!==id) drawerTab = (nw && nw.kind==='cmt') ? 'cmt' : 'info';
   if(r.lvl==='L1' && drawerTab==='cmt') drawerTab='info';
   drawerTabFor = id;
-  selId=id; markSeen(id);
+  selId=id; markSeen(id); markItemRead(id);
   const ro = !owns(r);
   const ck = ckStat(r.id);
   const opt=(arr,v,labels)=>`<option value=""></option>`+arr.map((x,i)=>`<option value="${esc(x)}" ${x===v?'selected':''}>${esc(labels?labels[i]:x)}</option>`).join('');
