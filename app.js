@@ -861,7 +861,7 @@ async function insertUnder(parentId, fields, label){
   { const dErr = rangeErr(fields); if(dErr){ toast(dErr); return null; } }
   if(depthOf(p) >= MAX_DEPTH){ toast(`세부 업무 아래에는 더 넣을 수 없어요 (최대 ${MAX_DEPTH}단계).`); return null; }
   const sheet = p.sheet, pref = sheet==='WBS'?'W':'R';
-  const nums = items.filter(r=>r.sheet===sheet && r.id.startsWith(pref+'-')).map(r=>parseInt(r.id.slice(2),10)).filter(n=>!isNaN(n));
+  const nums = items.filter(r=>r.id.startsWith(pref+'-')).map(r=>parseInt(r.id.slice(2),10)).filter(n=>!isNaN(n));
   const id = `${pref}-${String((nums.length?Math.max(...nums):0)+1).padStart(3,'0')}`;
   const sib = kids(parentId);
   const lastNum = sib.length ? Math.max(...sib.map(s=>parseInt(String(s.num).split('.').pop(),10)||0)) : 0;
@@ -1506,7 +1506,7 @@ async function openDrawer(id, tab){
       <div class="fgrid">
         <div class="field full"><label for="f-cat">${grp?'카테고리 이름':'Category'}</label><input id="f-cat" value="${esc(r.cat||'')}"></div>
         ${grp?'':`
-        <div class="field full"><label for="f-parent">상위 항목 (바꾸면 그 아래로 이동)</label><select id="f-parent">${parentOptions(r)}</select></div>
+        <div class="field full"><label for="f-parent">상위 항목 (바꾸면 그 아래로 이동 · 다른 시트로도 보낼 수 있어요)</label><select id="f-parent">${parentOptions(r)}</select></div>
         <div class="field full"><label for="f-task">Task</label><textarea id="f-task">${esc(r.task||'')}</textarea></div>
         <div class="field"><label for="f-output">Output / Check</label><input id="f-output" value="${esc(r.output||'')}"></div>
         <div class="field"><label for="f-link">산출물 링크${/^https?:\/\//.test(r.link||'')?` · <a href="${esc(r.link)}" target="_blank" rel="noopener noreferrer">열기</a>`:''}</label><input id="f-link" placeholder="NAS 경로 또는 URL" value="${esc(r.link||'')}"></div>
@@ -1579,6 +1579,11 @@ async function saveDrawer(r){
   const dErr = rangeErr({...r, ...patch});
   if(dErr){ toast(dErr); const el = drawer.querySelector('input.bad'); if(el){ el.focus(); el.scrollIntoView({block:'center'}); } return; }
   if(!changes.length && !moving){ toast('바뀐 내용이 없습니다.'); return; }
+  if(moving && byId[newParent] && byId[newParent].sheet!==r.sheet){
+    const np = byId[newParent], n = desc(r.id).length;
+    const yes = await confirmBox({title:`${SHEET_KO[np.sheet]}로 보낼까요?`, what:`${r.id} ${titleOf(r)}${n?` (하위 업무 ${n}건 함께)`:''}`, from:`${SHEET_KO[r.sheet]} · ${esc(r.num)}`, to:`${SHEET_KO[np.sheet]} · ${esc(np.num)} ${esc(np.cat||'')} 아래`, ok:'보내기'});
+    if(!yes) return;
+  }
   if(!changes.length && moving){ if(await moveItem(r,newParent)) openDrawer(r.id); return; }
   patch.updated_by = me.name; patch.updated_at = new Date().toISOString();
   $('d-save').disabled = true;
@@ -1604,13 +1609,17 @@ async function addItem(parentId){
 function parentOptions(r){
   const sub = new Set([r.id, ...desc(r.id).map(x=>x.id)]);
   const h = heightOf(r);
-  const opts = items.filter(x => x.sheet===r.sheet && !sub.has(x.id) && (x.lvl==='L1' || depthOf(x) + 1 + h <= MAX_DEPTH));
-  return opts.map(x => `<option value="${x.id}" ${x.id===r.parent?'selected':''}>${x.lvl==='L1'?'■ ':'　'.repeat(depthOf(x))+'└ '}${esc(x.num)} ${esc(x.cat||'')}</option>`).join('');
+  const optsOf = sh => items.filter(x => x.sheet===sh && !sub.has(x.id) && (x.lvl==='L1' || depthOf(x) + 1 + h <= MAX_DEPTH)).sort((a,b)=>a.sort_order-b.sort_order)
+    .map(x => `<option value="${x.id}" ${x.id===r.parent?'selected':''}>${x.lvl==='L1'?'■ ':'　'.repeat(depthOf(x))+'└ '}${esc(x.num)} ${esc(x.cat||'')}</option>`).join('');
+  const other = r.sheet==='WBS' ? 'REQ' : 'WBS';
+  const canCross = r.lvl!=='L1' && (me.role==='admin' || [r, ...desc(r.id)].every(owns));
+  return `<optgroup label="${SHEET_KO[r.sheet]} (지금 시트)">${optsOf(r.sheet)}</optgroup>` + (canCross ? `<optgroup label="→ ${SHEET_KO[other]}로 보내기">${optsOf(other)}</optgroup>` : '');
 }
 // ---- 업무 위치 옮기기: target 앞(before) / 뒤(after) / 안(into: 그 항목의 맨 아래 하위로). 형제 번호는 순서대로 다시 매김
+const SHEET_KO = {WBS:'WBS', REQ:'대표님 REQ'};
 function placeCheck(r, target, mode){
   if(!r || !target || r.id===target.id) return '같은 위치예요.';
-  if(r.sheet!==target.sheet) return 'WBS와 대표님 REQ 사이로는 옮길 수 없어요.';
+  if(r.sheet!==target.sheet && me.role!=='admin' && [r, ...desc(r.id)].some(x=>!owns(x))) return '하위 업무 중 내가 맡지 않은 것이 있어서 다른 시트로 옮길 수 없어요. 관리자에게 요청하세요.';
   if(r.lvl==='L1') return '카테고리는 옮길 수 없어요.';
   if(desc(r.id).some(x=>x.id===target.id)) return '자기 하위 업무 안으로는 옮길 수 없어요.';
   const np = mode==='into' ? target : byId[target.parent];
@@ -1622,7 +1631,8 @@ function placeCheck(r, target, mode){
 function placeDesc(r, target, mode){
   const np = mode==='into' ? target : byId[target.parent];
   const where = mode==='into' ? '맨 아래' : `${target.num} ${String(target.cat||'').slice(0,24)} ${mode==='before'?'앞':'다음'}`;
-  return {from:`${byId[r.parent]?byId[r.parent].num+' '+esc(byId[r.parent].cat):'–'} · ${esc(r.num)}`, to:`${esc(np.num)} ${esc(np.cat)} · ${esc(where)}`};
+  const cross = np.sheet!==r.sheet;
+  return {from:`${cross?SHEET_KO[r.sheet]+' · ':''}${byId[r.parent]?byId[r.parent].num+' '+esc(byId[r.parent].cat):'–'} · ${esc(r.num)}`, to:`${cross?SHEET_KO[np.sheet]+' · ':''}${esc(np.num)} ${esc(np.cat)} · ${esc(where)}`};
 }
 async function placeItem(r, target, mode){
   const err = placeCheck(r, target, mode); if(err){ toast(err); return false; }
@@ -1644,6 +1654,8 @@ async function placeItem(r, target, mode){
   const patch = {};   // id -> 바뀌는 값
   const put = (id, p) => { patch[id] = {...(patch[id]||{}), ...p}; };
   put(r.id, {parent:np.id, lvl: kidsAll.length ? 'P' : (np.lvl==='L1' ? 'T' : 'C'), sort_order: lo+step});
+  const cross = np.sheet!==r.sheet, fromSheet = r.sheet;
+  if(cross){ put(r.id, {sheet:np.sheet}); kidsAll.forEach(k=>put(k.id, {sheet:np.sheet})); }
   kidsAll.sort((a,b)=>a.sort_order-b.sort_order).forEach((k,i)=>put(k.id, {sort_order: lo+step*(i+2)}));
   if(np.lvl==='T' || np.lvl==='C') put(np.id, {lvl:'P'});
   if(old && old.id!==np.id && old.lvl==='P' && kids(old.id).filter(x=>x.id!==r.id).length===0) put(old.id, {lvl:leafLvl(old)});
@@ -1657,9 +1669,9 @@ async function placeItem(r, target, mode){
   for(const id of ids){ const { error } = await sb.from('items').update({...patch[id], ...stamp}).eq('id', id); if(error){ toast('옮기지 못했어요: '+error.message); await loadItems(); return false; } }
   const newNum = (patch[r.id].num) || r.num;
   FLASH_ID = r.id;
-  await sb.from('item_history').insert({item_id:r.id, changed_by:me.name, changes:`상위 항목 이동: ${old?old.num+' '+old.cat:'–'} → ${np.num} ${np.cat} (새 번호 ${newNum})`});
+  await sb.from('item_history').insert({item_id:r.id, changed_by:me.name, changes:`${cross?`시트 이동: ${SHEET_KO[fromSheet]} → ${SHEET_KO[np.sheet]} · `:''}상위 항목 이동: ${old?old.num+' '+old.cat:'–'} → ${np.num} ${np.cat} (새 번호 ${newNum})`});
   await loadItems();
-  toast(`${r.id}를 ${np.cat} ${mode==='into'?'맨 아래로':mode==='before'?`의 ${target.id} 앞으로`:`의 ${target.id} 다음으로`} 옮겼어요.`);
+  toast(`${r.id}를 ${cross?SHEET_KO[np.sheet]+'의 ':''}${np.cat} ${mode==='into'?'맨 아래로':mode==='before'?`의 ${target.id} 앞으로`:`의 ${target.id} 다음으로`} 옮겼어요.`);
   return true;
 }
 async function moveItem(r, newParentId){ return placeItem(r, byId[newParentId], 'into'); }
