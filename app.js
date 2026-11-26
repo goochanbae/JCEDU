@@ -89,7 +89,7 @@ function bindDateCheck(pairs, msgEl){
   for(const [a,b] of pairs) for(const id of [a,b]){ const el=$(id); if(el){ el.addEventListener('input',run); el.addEventListener('change',run); } }
   run(); return run;
 }
-function toast(msg){ const t=$('toast'); t.textContent=msg; t.classList.add('on'); clearTimeout(t._h); t._h=setTimeout(()=>t.classList.remove('on'),2600); }
+function toast(msg){ const t=$('toast'); t.textContent=msg; t.classList.toggle('err', /못했|못 |늦어요|빨라요|오류|없어요|입력하세요|고르세요|수 없|확인하세요/.test(msg)); t.classList.add('on'); clearTimeout(t._h); t._h=setTimeout(()=>t.classList.remove('on'), Math.max(2600, Math.min(6000, msg.length*90))); }
 function showOnly(id){ for(const v of ['loginView','deniedView','appView']) $(v).classList.toggle('hidden', v!==id); }
 
 // ---------------- auth

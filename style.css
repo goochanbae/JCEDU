@@ -610,3 +610,10 @@ input[type=date].bad{border-color:var(--bad,#e5484d)!important;background:#fff5f
 .date-err{color:var(--bad,#e5484d);font-size:12px;font-weight:600;margin-top:-4px}
 .date-err:not([hidden]){display:block}
 .date-err::before{content:"⚠ "}
+
+/* 알림: 화면 중앙에 크게 */
+.toast{top:50%;bottom:auto;left:50%;transform:translate(-50%,-50%) scale(.94);max-width:min(520px,calc(100vw - 40px));padding:18px 26px;font-size:16px;line-height:1.5;border-radius:16px;box-shadow:0 18px 50px rgba(0,0,0,.28);transition:opacity .18s,transform .18s;text-align:left;z-index:200}
+.toast.on{transform:translate(-50%,-50%) scale(1)}
+.toast::before{width:10px;height:10px}
+.toast.err::before{background:#ff5a5f}
+@media (max-width:640px){ .toast{font-size:15px;padding:16px 20px} }
