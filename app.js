@@ -1189,7 +1189,7 @@ function onCommentInsert(c){
 }
 
 // ---------------- 일일보고 — 전일 결과는 어제 금일 업무에서 자동, 금일은 내 업무에서 선택, 이번 주 계획은 업무 목록에서 자동
-// 제출하면 업무 진척률·상태에 반영하고, 팀 양식 그대로 문구 복사 · 엑셀(팀 양식) 내려받기
+// 제출하면 업무 진척률·상태에 반영 · 엑셀(팀 양식) 내려받기 · 메신저 문구는 따로 복사
 const KIND_KO = {goal:'목표', P:'P', R:'R'};
 const DR_ST = {'Planned':'예정','In Progress':'진행중','Review':'진행중','On Hold':'보류','Completed':'완료','Canceled':'완료'};
 const isWork = r => isTask(r) && r.kind!=='goal';
@@ -1283,9 +1283,9 @@ function renderWrite(){
    <aside class="dr-side panel">
      <h2 class="sec">보내기</h2>
      <button class="btn" type="button" id="dr-save">임시 저장</button>
-     <button class="btn primary" type="button" id="dr-submit">제출하고 문구 복사</button>
+     <button class="btn primary" type="button" id="dr-submit">제출하기</button>
      <button class="btn" type="button" id="dr-xlsx" title="누르면 일일보고가 제출되고 팀 양식 엑셀이 내려받아져요">제출하고 엑셀 내려받기</button>
-     <button class="btn" type="button" id="dr-copy">문구만 복사</button>
+     <button class="btn" type="button" id="dr-copy">메신저 문구 복사</button>
      <p class="hist" style="margin:4px 0 0">제출하면 전일 결과의 진행률이 각 업무에 반영돼요. 100%는 완료(컨펌 대기를 고르면 '컨펌 대기')로 바뀌어요.</p>
      <h2 class="sec" style="margin-top:12px">미리보기</h2>
      <pre class="dr-pre" id="dr-pre"></pre>
@@ -1376,7 +1376,7 @@ async function saveDaily(submit, quiet){
   if(submit){
     await sb.from('item_history').insert({item_id:'DAILY', changed_by:me.name, changes:`일일보고 제출 (${yymmdd(f.date)}) · 전일 ${DR.done.length}건 · 금일 ${DR.today.length}건`});
     for(const x of issues){ const t = `${x.issue} ${x.action}`; const ms = mentionsIn(t).filter(n=>n!==me.name); if(ms.length) await sb.from('item_history').insert({item_id:'DAILY', changed_by:me.name, changes:`일일보고 이슈: ${x.issue}${x.action?' → '+x.action:''}`}); }
-    copyText(drText(me.name, f.date, DR.done, DR.today, issues, plan), '제출했어요. 일일보고 문구를 복사했어요 — 메신저에 붙여넣으세요.');
+    if(!quiet) toast('제출했어요. 업무 진행률에도 반영했어요.');
   } else if(!quiet) toast('임시 저장했어요.');
   if(!quiet) renderWrite();
   return true;
