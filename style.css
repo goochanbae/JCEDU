@@ -531,3 +531,26 @@ tr.task:hover .cmtbtn.zero,.mrow:hover .cmtbtn.zero{border-color:var(--line);bac
 @media (max-width:1000px){.dr-grid,.dr-team{grid-template-columns:1fr}.dr-side{position:static}}
 @media (max-width:600px){.dr-row,.dr-row[data-sec="today"]{grid-template-columns:auto minmax(0,1fr) 70px 26px}.dr-row select[data-f="note"]{grid-column:2}.dr-iss{grid-template-columns:1fr 26px}.dr-iss input[data-if="action"]{grid-column:1}.dr-pr{grid-template-columns:auto minmax(0,1fr) 120px}}
 a.btn{text-decoration:none;color:inherit;display:inline-flex;align-items:center}
+
+/* 일일보고 항목 정렬: 1행 = 업무명, 2행 = 구분 · 세부 내용 · 진행률 · 상태 · 빼기 (같은 높이로 한 줄) */
+.dr-row,.dr-row[data-sec="today"]{grid-template-columns:52px minmax(0,1fr) 96px 116px 34px;grid-template-rows:auto auto;column-gap:8px;row-gap:6px;align-items:center;padding:12px 0}
+.dr-row[data-sec="today"]{grid-template-columns:52px minmax(0,1fr) 96px 34px}
+.dr-row .dr-t{display:contents}
+.dr-row .dr-t>b,.dr-row .dr-t>.dr-title{grid-column:2/-1;grid-row:1}
+.dr-row>.kt,.dr-row>.dr-kind{grid-column:1;grid-row:2;justify-self:center}
+.dr-row>.kt{margin:0;font-size:11px;padding:2px 7px}
+.dr-row .dr-detail{grid-column:2;grid-row:2}
+.dr-row>select[data-f="prog"]{grid-column:3;grid-row:2}
+.dr-row>select[data-f="note"]{grid-column:4;grid-row:2}
+.dr-row>[data-del]{grid-column:-2;grid-row:2;justify-self:center;margin:0}
+.dr-row input,.dr-row select{height:38px;box-sizing:border-box;width:100%}
+.dr-row>.dr-kind{width:52px}
+@media (max-width:600px){
+  .dr-row,.dr-row[data-sec="today"]{grid-template-columns:52px minmax(0,1fr) 34px;grid-template-rows:auto auto auto}
+  .dr-row>select[data-f="prog"]{grid-column:2;grid-row:3}
+  .dr-row>select[data-f="note"]{grid-column:2;grid-row:3;justify-self:end;width:48%}
+  .dr-row>select[data-f="prog"]{width:48%}
+  .dr-row>[data-del]{grid-column:3}
+}
+@media (max-width:1000px){.dr-grid,.dr-team{grid-template-columns:minmax(0,1fr)}}
+@media (max-width:600px){.dr-pr{grid-template-columns:auto minmax(0,1fr);row-gap:6px}.dr-pr input[type=date]{grid-column:2;width:150px}.dr-pr .chip,.dr-pr .linkbtn{grid-column:2;justify-self:start}.dr-pk span:nth-of-type(2){flex-basis:100%}}
