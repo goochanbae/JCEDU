@@ -581,3 +581,12 @@ a.btn{text-decoration:none;color:inherit;display:inline-flex;align-items:center}
 /* 간트: 날짜 표시 */
 .g-weeks div.dd{border-left:0;font-size:9.5px;color:var(--muted);padding:20px 0 0 2px;opacity:.8}
 .g-head .g-weeks{cursor:zoom-in}
+/* 표에서 업무 줄 끌어 옮기기 */
+tr.task[draggable="true"] td:first-child{cursor:grab}
+tr.task[draggable="true"] td:first-child::before{content:"⋮⋮";color:var(--line);font-size:11px;letter-spacing:-2px;margin-right:4px;vertical-align:1px}
+tr.task[draggable="true"]:hover td:first-child::before{color:var(--muted)}
+tr.dragging-row td{opacity:.4}
+tr.drop-before td{box-shadow:inset 0 3px 0 var(--mint-deep)}
+tr.drop-after td{box-shadow:inset 0 -3px 0 var(--mint-deep)}
+tr.drop-into td{background:var(--accent-soft)!important;box-shadow:inset 0 0 0 1px var(--mint-deep)}
+tr.drop-no td{background:var(--bad-soft)!important}

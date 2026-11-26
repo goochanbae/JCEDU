@@ -273,7 +273,7 @@ function renderTable(sheet, bodyOnly){
     if(col) continue;
     for(const r of vis){
       const a2 = r.lvl==='P' ? groupAgg(r) : null;
-      body += `<tr class="task lvl-${r.lvl}${r.id===selId?' sel':''}" data-id="${r.id}">
+      body += `<tr class="task lvl-${r.lvl}${r.id===selId?' sel':''}" data-id="${r.id}" ${owns(r)?'draggable="true" title="끌어서 위치 옮기기"':''}>
         <td class="mono">${r.id}</td><td class="mono" style="color:var(--muted)">${esc(r.num)}</td>
         <td class="t-name"><span class="cat">${r.kind?`<span class="kt kt-${r.kind}">${r.kind==='goal'?'목표':r.kind}</span>`:''}${esc(r.cat||'')}${delChip(r)}${newsChip(r)}${cmtBtn(r,true)}</span><span class="tk">${esc(r.task||'')}</span></td>
         ${colOrder.map(k=>`<td class="${MOVABLE[k].cls||''}">${MOVABLE[k].cell(r,a2)}</td>`).join('')}</tr>`;
@@ -317,6 +317,7 @@ function renderTable(sheet, bodyOnly){
   on(`${key}-addcat`,'click',()=>addCategory(sheet));
   bindBody();
   function bindBody(){
+  bindRowDrag(view.querySelector('.tablewrap tbody'));
   on(`${key}-colreset`,'click',()=>{ colOrder=[...DEFAULT_COLS]; saveCols(); renderTable(sheet); });
   // 열 드래그
   let dragKey=null;
@@ -1554,31 +1555,97 @@ function parentOptions(r){
   const opts = items.filter(x => x.sheet===r.sheet && !sub.has(x.id) && (x.lvl==='L1' || (!hasKids && (x.lvl==='T'||x.lvl==='P'))));
   return opts.map(x => `<option value="${x.id}" ${x.id===r.parent?'selected':''}>${x.lvl==='L1'?'■ ':'　└ '}${esc(x.num)} ${esc(x.cat||'')}</option>`).join('');
 }
-async function moveItem(r, newParentId){
-  const np = byId[newParentId]; if(!np) return false;
-  const kidsAll = desc(r.id);
-  if(np.lvl!=='L1' && kidsAll.length){ toast('하위 업무가 있는 항목은 카테고리 바로 아래로만 옮길 수 있습니다.'); return false; }
-  const old = byId[r.parent];
-  const subIds = new Set([r.id, ...kidsAll.map(x=>x.id)]);
-  const sib = kids(np.id).filter(x=>!subIds.has(x.id));
-  const last = sib.length ? Math.max(...sib.map(x=>parseInt(String(x.num).split('.').pop(),10)||0)) : 0;
-  const num = `${np.num}.${last+1}`;
-  const lvl = np.lvl==='L1' ? (kidsAll.length?'P':'T') : 'C';
-  const block = [np, ...desc(np.id)].filter(x=>!subIds.has(x.id));
-  const tail = block.reduce((a,b)=>b.sort_order>a.sort_order?b:a);
-  const next = items.filter(x=>!subIds.has(x.id) && x.sort_order>tail.sort_order).sort((a,b)=>a.sort_order-b.sort_order)[0];
-  const hi = next ? next.sort_order : tail.sort_order + kidsAll.length + 2;
-  const step = (hi - tail.sort_order) / (kidsAll.length + 2);
+// ---- 업무 위치 옮기기: target 앞(before) / 뒤(after) / 안(into: 그 항목의 맨 아래 하위로). 형제 번호는 순서대로 다시 매김
+function placeCheck(r, target, mode){
+  if(!r || !target || r.id===target.id) return '같은 위치예요.';
+  if(r.sheet!==target.sheet) return 'WBS와 대표님 REQ 사이로는 옮길 수 없어요.';
+  if(r.lvl==='L1') return '카테고리는 옮길 수 없어요.';
+  if(desc(r.id).some(x=>x.id===target.id)) return '자기 하위 업무 안으로는 옮길 수 없어요.';
+  const np = mode==='into' ? target : byId[target.parent];
+  if(!np) return '옮길 위치를 찾지 못했어요.';
+  if(mode==='into' && target.lvl==='C') return '하위 업무 안에는 넣을 수 없어요 (최대 3단계).';
+  if(np.lvl!=='L1' && desc(r.id).length) return '하위 업무가 있는 항목은 카테고리 바로 아래로만 옮길 수 있어요.';
+  if(mode!=='into' && np.id===r.parent){ const sib = kids(np.id); const i = sib.indexOf(target), j = sib.indexOf(r); if((mode==='before' && i===j+1) || (mode==='after' && i===j-1)) return '이미 그 위치에 있어요.'; }
+  return '';
+}
+function placeDesc(r, target, mode){
+  const np = mode==='into' ? target : byId[target.parent];
+  const where = mode==='into' ? '맨 아래' : `${target.num} ${String(target.cat||'').slice(0,24)} ${mode==='before'?'앞':'다음'}`;
+  return {from:`${byId[r.parent]?byId[r.parent].num+' '+esc(byId[r.parent].cat):'–'} · ${esc(r.num)}`, to:`${esc(np.num)} ${esc(np.cat)} · ${esc(where)}`};
+}
+async function placeItem(r, target, mode){
+  const err = placeCheck(r, target, mode); if(err){ toast(err); return false; }
+  const np = mode==='into' ? target : byId[target.parent], old = byId[r.parent];
+  const kidsAll = desc(r.id), subIds = new Set([r.id, ...kidsAll.map(x=>x.id)]);
+  const order = items.filter(x=>!subIds.has(x.id)).sort((a,b)=>a.sort_order-b.sort_order);
+  // 들어갈 자리의 앞(lo)·뒤(hi) sort_order
+  let lo, hi;
+  if(mode==='before'){ const i = order.indexOf(target); lo = i>0 ? order[i-1].sort_order : target.sort_order-1; hi = target.sort_order; }
+  else {
+    const blockOf = mode==='into' ? np : target;
+    const block = [blockOf, ...desc(blockOf.id)].filter(x=>!subIds.has(x.id));
+    const tail = block.reduce((a,b)=>b.sort_order>a.sort_order?b:a);
+    const nx = order.find(x=>x.sort_order>tail.sort_order);
+    lo = tail.sort_order; hi = nx ? nx.sort_order : tail.sort_order + kidsAll.length + 2;
+  }
+  const step = (hi-lo)/(kidsAll.length+2);
   const stamp = {updated_by:me.name, updated_at:new Date().toISOString()};
-  const ups = [{id:r.id, patch:{parent:np.id, lvl, num, sort_order:tail.sort_order+step, ...stamp}}];
-  kidsAll.forEach((k,i)=>ups.push({id:k.id, patch:{num:`${num}.${i+1}`, sort_order:tail.sort_order+step*(i+2), ...stamp}}));
-  if(np.lvl==='T') ups.push({id:np.id, patch:{lvl:'P', ...stamp}});
-  if(old && old.lvl==='P' && kids(old.id).filter(x=>x.id!==r.id).length===0) ups.push({id:old.id, patch:{lvl:'T', ...stamp}});
-  for(const u of ups){ const { error } = await sb.from('items').update(u.patch).eq('id',u.id); if(error){ toast('이동하지 못했습니다: '+error.message); await loadItems(); return false; } }
-  await sb.from('item_history').insert({item_id:r.id, changed_by:me.name, changes:`상위 항목 이동: ${old?old.num+' '+old.cat:'–'} → ${np.num} ${np.cat} (새 번호 ${num})`});
+  const patch = {};   // id -> 바뀌는 값
+  const put = (id, p) => { patch[id] = {...(patch[id]||{}), ...p}; };
+  put(r.id, {parent:np.id, lvl: np.lvl==='L1' ? (kidsAll.length?'P':'T') : 'C', sort_order: lo+step});
+  kidsAll.sort((a,b)=>a.sort_order-b.sort_order).forEach((k,i)=>put(k.id, {sort_order: lo+step*(i+2)}));
+  if(np.lvl==='T') put(np.id, {lvl:'P'});
+  if(old && old.id!==np.id && old.lvl==='P' && kids(old.id).filter(x=>x.id!==r.id).length===0) put(old.id, {lvl:'T'});
+  // 번호 다시 매기기 (새 상위, 옛 상위의 형제와 그 하위)
+  const so = x => patch[x.id] && patch[x.id].sort_order!=null ? patch[x.id].sort_order : x.sort_order;
+  const parentOf = x => patch[x.id] && patch[x.id].parent ? patch[x.id].parent : x.parent;
+  const childrenOf = pid => items.filter(x=>parentOf(x)===pid).sort((a,b)=>so(a)-so(b));
+  const renum = (pid, pnum) => childrenOf(pid).forEach((c,i)=>{ const n = `${pnum}.${i+1}`; if(c.num!==n) put(c.id, {num:n}); renum(c.id, n); });
+  renum(np.id, np.num); if(old && old.id!==np.id) renum(old.id, old.num);
+  const ids = Object.keys(patch);
+  for(const id of ids){ const { error } = await sb.from('items').update({...patch[id], ...stamp}).eq('id', id); if(error){ toast('옮기지 못했어요: '+error.message); await loadItems(); return false; } }
+  const newNum = (patch[r.id].num) || r.num;
+  await sb.from('item_history').insert({item_id:r.id, changed_by:me.name, changes:`상위 항목 이동: ${old?old.num+' '+old.cat:'–'} → ${np.num} ${np.cat} (새 번호 ${newNum})`});
   await loadItems();
-  toast(`${np.cat} 아래로 옮겼습니다.`);
+  toast(`${r.id}를 ${np.cat} ${mode==='into'?'맨 아래로':mode==='before'?`의 ${target.id} 앞으로`:`의 ${target.id} 다음으로`} 옮겼어요.`);
   return true;
+}
+async function moveItem(r, newParentId){ return placeItem(r, byId[newParentId], 'into'); }
+// 표에서 줄을 끌어 옮기기 (확인 창을 거쳐서)
+function bindRowDrag(tbody){
+  if(!tbody) return;
+  let dragId = null;
+  const zone = (tr, e) => {
+    const t = byId[tr.dataset.id||tr.dataset.g], rc = tr.getBoundingClientRect(), y = (e.clientY-rc.top)/rc.height;
+    if(tr.dataset.g) return {t, mode:'into'};
+    if(y < .3) return {t, mode:'before'};
+    if(y > .7) return {t, mode:'after'};
+    return {t, mode: t.lvl==='C' ? (y<.5?'before':'after') : 'into'};
+  };
+  const clear = () => tbody.querySelectorAll('.drop-before,.drop-after,.drop-into,.drop-no').forEach(x=>x.classList.remove('drop-before','drop-after','drop-into','drop-no'));
+  tbody.addEventListener('dragstart', e => {
+    const tr = e.target.closest('tr[data-id][draggable="true"]'); if(!tr) return;
+    dragId = tr.dataset.id; tr.classList.add('dragging-row');
+    e.dataTransfer.effectAllowed = 'move'; try{ e.dataTransfer.setData('text/plain', 'row:'+dragId); }catch(_){}
+  });
+  tbody.addEventListener('dragend', e => { const tr = e.target.closest('tr'); if(tr) tr.classList.remove('dragging-row'); clear(); dragId = null; });
+  tbody.addEventListener('dragover', e => {
+    if(!dragId) return; const tr = e.target.closest('tr[data-id],tr[data-g]'); if(!tr) return;
+    e.preventDefault(); clear();
+    const {t, mode} = zone(tr, e), bad = placeCheck(byId[dragId], t, mode);
+    tr.classList.add(bad ? 'drop-no' : 'drop-'+mode); e.dataTransfer.dropEffect = bad ? 'none' : 'move';
+  });
+  tbody.addEventListener('dragleave', e => { const tr = e.target.closest('tr'); if(tr && !tr.contains(e.relatedTarget)) tr.classList.remove('drop-before','drop-after','drop-into','drop-no'); });
+  tbody.addEventListener('drop', async e => {
+    if(!dragId) return; const tr = e.target.closest('tr[data-id],tr[data-g]'); if(!tr) return;
+    e.preventDefault(); clear();
+    const r = byId[dragId], {t, mode} = zone(tr, e); dragId = null;
+    const bad = placeCheck(r, t, mode); if(bad){ toast(bad); return; }
+    const d = placeDesc(r, t, mode);
+    const yes = await confirmBox({title:'업무를 옮길까요?', what:`${r.id} ${titleOf(r)}${desc(r.id).length?` (하위 업무 ${desc(r.id).length}건 함께)`:''}`, from:d.from, to:d.to, ok:'옮기기'});
+    if(!yes){ toast('옮기기를 취소했어요.'); return; }
+    await placeItem(r, t, mode);
+  });
 }
 
 // ---- 카테고리 추가
