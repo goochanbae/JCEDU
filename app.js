@@ -1284,7 +1284,7 @@ function renderWrite(){
      <h2 class="sec">보내기</h2>
      <button class="btn" type="button" id="dr-save">임시 저장</button>
      <button class="btn primary" type="button" id="dr-submit">제출하고 문구 복사</button>
-     <button class="btn" type="button" id="dr-xlsx">엑셀 내려받기 (팀 양식)</button>
+     <button class="btn" type="button" id="dr-xlsx" title="누르면 일일보고가 제출되고 팀 양식 엑셀이 내려받아져요">제출하고 엑셀 내려받기</button>
      <button class="btn" type="button" id="dr-copy">문구만 복사</button>
      <p class="hist" style="margin:4px 0 0">제출하면 전일 결과의 진행률이 각 업무에 반영돼요. 100%는 완료(컨펌 대기를 고르면 '컨펌 대기')로 바뀌어요.</p>
      <h2 class="sec" style="margin-top:12px">미리보기</h2>
@@ -1327,7 +1327,15 @@ function bindWrite(){
     if(e.target.id==='dr-save'){ await saveDaily(false); return; }
     if(e.target.id==='dr-submit'){ await saveDaily(true); return; }
     if(e.target.id==='dr-copy'){ copyText($('dr-pre').textContent, '일일보고 문구를 복사했어요.'); return; }
-    if(e.target.id==='dr-xlsx'){ await downloadDailyXlsx(me.name, f.date, DR.done, DR.today, DR.issues, planFor(me.name, f.date)); return; }
+    if(e.target.id==='dr-xlsx'){
+      // 엑셀 내려받기 = 제출 + 엑셀 (제출 시점 내용으로 만듦)
+      if(!cleanEntries(DR.done).length && !cleanEntries(DR.today).length){ toast('전일 결과나 금일 업무를 하나 이상 적은 뒤 내려받으세요.'); return; }
+      const b = e.target; b.disabled = true; const old = b.textContent; b.textContent = '제출하는 중…';
+      const done = DR.done.map(x=>({...x})), todayL = DR.today.map(x=>({...x})), issues = DR.issues.map(x=>({...x}));
+      const ok = await saveDaily(true, true);
+      if(ok){ renderWrite(); const got = await downloadDailyXlsx(me.name, f.date, done, todayL, issues, planFor(me.name, f.date)); toast(got ? '제출하고 엑셀(팀 양식)로 내려받았어요.' : '제출은 됐지만 엑셀을 만들지 못했어요. 다시 눌러 주세요.'); }
+      else { b.disabled = false; b.textContent = old; }
+      return; }
   });
   $('dr-new').onsubmit = async e => {
     e.preventDefault(); const t=$('dr-new-title').value.trim(); if(!t){ toast('새 업무명을 입력하세요.'); return; }
@@ -1347,7 +1355,7 @@ async function saveDaily(submit, quiet){
   const issues = DR.issues.filter(x=>(x.issue||'').trim()||(x.action||'').trim());
   const row = {report_date:f.date, author:me.name, issues, updated_at:now}; if(submit) row.submitted_at = now;
   const { data:rep, error } = await sb.from('daily_reports').upsert(row, {onConflict:'author,report_date'}).select().single();
-  if(error){ toast('저장하지 못했어요: '+error.message); return; }
+  if(error){ toast('저장하지 못했어요: '+error.message); return false; }
   // 업무 반영 (제출할 때만): 전일 결과 진행률 → 업무, 금일 업무 → 진행 중
   if(submit){
     for(const e of DR.done){ const r = e.item_id && byId[e.item_id]; if(!r || !owns(r)) continue;
@@ -1363,7 +1371,7 @@ async function saveDaily(submit, quiet){
     ...DR.today.map((e,i)=>({report_id:rep.id, section:'today', item_id:e.item_id||null, kind:e.kind||'P', title:e.title.trim(), detail:e.detail||null, prog:e.prog==null?null:Number(e.prog), sort_order:i})),
     ...(submit ? plan.map((p,i)=>({report_id:rep.id, section:'plan', item_id:p.item_id, kind:p.kind, title:p.title, detail:p.detail||null, due_date:p.due, status:p.status, sort_order:i})) : [])
   ];
-  if(ents.length){ const { error:e2 } = await sb.from('daily_entries').insert(ents); if(e2){ toast('항목을 저장하지 못했어요: '+e2.message); return; } }
+  if(ents.length){ const { error:e2 } = await sb.from('daily_entries').insert(ents); if(e2){ toast('항목을 저장하지 못했어요: '+e2.message); return false; } }
   DR.report = rep; DR.dirty = false;
   if(submit){
     await sb.from('item_history').insert({item_id:'DAILY', changed_by:me.name, changes:`일일보고 제출 (${yymmdd(f.date)}) · 전일 ${DR.done.length}건 · 금일 ${DR.today.length}건`});
@@ -1371,6 +1379,7 @@ async function saveDaily(submit, quiet){
     copyText(drText(me.name, f.date, DR.done, DR.today, issues, plan), '제출했어요. 일일보고 문구를 복사했어요 — 메신저에 붙여넣으세요.');
   } else if(!quiet) toast('임시 저장했어요.');
   if(!quiet) renderWrite();
+  return true;
 }
 async function downloadDailyXlsx(author, dateIso, done, todayL, issues, plan){
   try{
@@ -1382,8 +1391,8 @@ async function downloadDailyXlsx(author, dateIso, done, todayL, issues, plan){
       issues: issues.filter(x=>x.issue||x.action), plan: plan.map(p=>({kind:p.kind, title:p.title, detail:p.detail, due:p.due, status:p.status}))});
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `일일보고_${author}_${dateIso.replace(/-/g,'').slice(2)}.xlsx`; a.click();
     setTimeout(()=>URL.revokeObjectURL(a.href), 4000);
-    toast('엑셀(팀 양식)로 내려받았어요.');
-  }catch(err){ toast('엑셀을 만들지 못했어요: '+err.message); }
+    toast('엑셀(팀 양식)로 내려받았어요.'); return true;
+  }catch(err){ toast('엑셀을 만들지 못했어요: '+err.message); return false; }
 }
 
 // ---- 팀 일일보고 (날짜별 전원 · 미제출 · 이슈 · 공동 업무 · 주간 정리)
