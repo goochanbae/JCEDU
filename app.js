@@ -80,6 +80,15 @@ function sheetStats(sheet){
   const chk = ts.map(check);
   return {ts, actual, plan, late:chk.filter(c=>c==='지연').length, soon:chk.filter(c=>c==='임박').length, warn:chk.filter(c=>c.startsWith('⚠')).length};
 }
+// 날짜 범위 검사: 시작일이 종료일보다 늦으면 오류 문구를 돌려줌
+const DATE_PAIRS = [['start_date','end_date','시작일','종료일'],['req_date','due_date','요청일','보고 기한'],['req_date','done_date','요청일','보고 완료일']];
+function rangeErr(o){ for(const [a,b,la,lb] of DATE_PAIRS){ const x=o[a], y=o[b]; if(x&&y&&String(x).slice(0,10)>String(y).slice(0,10)) return `${la}(${fmtD(pd(x))})이 ${lb}(${fmtD(pd(y))})보다 늦어요. 날짜를 확인하세요.`; } return ''; }
+// 입력칸 실시간 표시: 잘못된 칸에 빨간 테두리 + 아래 문구
+function bindDateCheck(pairs, msgEl){
+  const run = () => { let msg=''; for(const [a,b] of pairs){ const A=$(a), B=$(b); if(!A||!B) continue; const bad = A.value&&B.value&&A.value>B.value; B.min=A.value||''; A.max=B.value||''; A.classList.toggle('bad',bad); B.classList.toggle('bad',bad); B.setAttribute('aria-invalid',bad); if(bad&&!msg) msg = `${A.dataset.dl||'시작일'}이 ${B.dataset.dl||'종료일'}보다 늦어요.`; } if(msgEl){ msgEl.textContent=msg; msgEl.hidden=!msg; } return msg; };
+  for(const [a,b] of pairs) for(const id of [a,b]){ const el=$(id); if(el){ el.addEventListener('input',run); el.addEventListener('change',run); } }
+  run(); return run;
+}
 function toast(msg){ const t=$('toast'); t.textContent=msg; t.classList.add('on'); clearTimeout(t._h); t._h=setTimeout(()=>t.classList.remove('on'),2600); }
 function showOnly(id){ for(const v of ['loginView','deniedView','appView']) $(v).classList.toggle('hidden', v!==id); }
 
@@ -625,6 +634,7 @@ async function loadChecks(){
 // 목록에서 바로 바꾸기 (상태·진척률·메모). 변경 이력에 자동 기록
 async function quickUpdate(r, patch){
   if(!owns(r)){ toast('담당자(PIC·Backup)나 등록한 사람만 수정할 수 있어요.'); return false; }
+  { const dErr = rangeErr({...r, ...patch}); if(dErr){ toast(dErr); return false; } }
   const nextSt = patch.st!==undefined ? patch.st : r.st;
   if(isTask(r) && patch.st==='Completed' && (r.prog==null || r.prog<1) && !ckStat(r.id).n) patch.prog = 1;
   if(patch.prog!=null && patch.prog>0 && nextSt==='Planned' && patch.st===undefined) patch.st = 'In Progress';
@@ -806,11 +816,12 @@ function openQuickAdd(){
   if(!canEdit()) return; selId=null;
   drawer.innerHTML = `
     <header><div style="flex:1"><div class="id">PIC ${esc(me.name)}</div><h3>업무 등록</h3></div><button class="btn" type="button" id="qa-close">닫기</button></header>
-    <form class="body" id="qa-form">
+    <form class="body" id="qa-form" novalidate>
       <div class="fgrid">
         <div class="field full"><label for="qa-name">업무명 *</label><input id="qa-name" required maxlength="120" placeholder="11월 블로그 원고 4건 발행"></div>
-        <div class="field"><label for="qa-start">시작일</label><input id="qa-start" type="date" value="${iso(today)}"></div>
-        <div class="field"><label for="qa-end">마감일</label><input id="qa-end" type="date"></div>
+        <div class="field"><label for="qa-start">시작일</label><input id="qa-start" data-dl="시작일" type="date" value="${iso(today)}"></div>
+        <div class="field"><label for="qa-end">마감일</label><input id="qa-end" data-dl="마감일" type="date"></div>
+        <div class="field full date-err" id="qa-daterr" role="alert" hidden></div>
         <div class="field"><label for="qa-kind">유형</label><select id="qa-kind"><option value="P">P 프로젝트</option><option value="R">R 반복(루틴)</option></select></div>
         <div class="field"><label for="qa-sheet">구분</label><select id="qa-sheet"><option value="WBS">WBS</option><option value="REQ">대표님 REQ</option></select></div>
         <div class="field"><label for="qa-brand">브랜드</label><select id="qa-brand">${BRANDS.map(b=>`<option ${b==='공통'?'selected':''}>${esc(b)}</option>`).join('')}</select></div>
@@ -826,12 +837,13 @@ function openQuickAdd(){
   $('qa-close').onclick = $('qa-cancel').onclick = closeDrawer;
   $('qa-sheet').onchange = e => { $('qa-parent').innerHTML = placeOptions(e.target.value); };
   $('qa-name').focus();
+  bindDateCheck([['qa-start','qa-end']], $('qa-daterr'));
   $('qa-form').onsubmit = async e => {
     e.preventDefault();
     const name=$('qa-name').value.trim(), parent=$('qa-parent').value, s=$('qa-start').value||null, en=$('qa-end').value||null;
     if(!name){ $('qa-msg').textContent='업무명을 입력하세요.'; return; }
     if(!parent){ $('qa-msg').textContent='위치를 고르세요.'; return; }
-    if(s && en && en<s){ $('qa-msg').textContent='마감일이 시작일보다 빨라요.'; return; }
+    if(s && en && en<s){ $('qa-msg').textContent=`시작일(${fmtD(pd(s))})이 마감일(${fmtD(pd(en))})보다 늦어요. 날짜를 확인하세요.`; toast('시작일이 마감일보다 늦어요.'); $('qa-end').focus(); return; }
     const lines = $('qa-checks').value.split('\n').map(x=>x.trim()).filter(Boolean).slice(0,50);
     $('qa-save').disabled = true;
     const id = await insertUnder(parent, {cat:name, kind:$('qa-kind').value, cyc:$('qa-kind').value==='R'?'반복':'단발', brand:$('qa-brand').value, pic:$('qa-pic').value||me.name, bak:$('qa-bak').value||null, start_date:s, end_date:en, prog:lines.length?0:null}, '업무 등록');
@@ -846,6 +858,7 @@ function openQuickAdd(){
 // 상위 항목 아래에 새 업무 추가 (번호·순서·계층 자동). 성공하면 새 id
 async function insertUnder(parentId, fields, label){
   const p = byId[parentId]; if(!p){ toast('위치를 찾지 못했어요. 새로고침 후 다시 시도하세요.'); return null; }
+  { const dErr = rangeErr(fields); if(dErr){ toast(dErr); return null; } }
   if(depthOf(p) >= MAX_DEPTH){ toast(`세부 업무 아래에는 더 넣을 수 없어요 (최대 ${MAX_DEPTH}단계).`); return null; }
   const sheet = p.sheet, pref = sheet==='WBS'?'W':'R';
   const nums = items.filter(r=>r.sheet===sheet && r.id.startsWith(pref+'-')).map(r=>parseInt(r.id.slice(2),10)).filter(n=>!isNaN(n));
@@ -1255,7 +1268,7 @@ function renderWrite(){
     <section class="panel"><h2 class="sec">02 금일 업무 내용 <span class="hist" style="display:inline">내 업무를 체크하고 목표 진행률을 고르세요</span></h2>
       <div class="dr-pick">${open.map(r=>{ const c=check(r); return `<label class="dr-pk ${chosen.has(r.id)?'on':''}"><input type="checkbox" data-pick="${r.id}" ${chosen.has(r.id)?'checked':''}>${kindTag(r.kind)}<span>${esc(titleOf(r))}</span><span class="hist" style="display:inline">${r.end_date?yymmdd(r.end_date):'완료일 없음'} · ${p100(r.prog)||'0%'}${c==='지연'?' · <b style="color:var(--bad)">지연</b>':''}</span></label>`; }).join('') || '<div class="hist">진행 중인 내 업무가 없어요. 새 업무를 추가하세요.</div>'}</div>
       <div class="dr-list">${DR.today.map((e,i)=>row(e,i,'today')).join('')}</div>
-      <form class="dr-new" id="dr-new"><select id="dr-new-kind" aria-label="구분"><option value="P">P 프로젝트</option><option value="R">R 반복</option></select><input id="dr-new-title" placeholder="새 업무명 (예: 메디원 채용공고 제작)" aria-label="새 업무명" maxlength="120"><input type="date" id="dr-new-end" aria-label="예상 완료일"><button class="btn" type="submit">+ 새 업무로 추가</button></form>
+      <form class="dr-new" id="dr-new" novalidate><select id="dr-new-kind" aria-label="구분"><option value="P">P 프로젝트</option><option value="R">R 반복</option></select><input id="dr-new-title" placeholder="새 업무명 (예: 메디원 채용공고 제작)" aria-label="새 업무명" maxlength="120"><input type="date" id="dr-new-end" aria-label="예상 완료일" min="${f.date}" oninput="this.classList.remove('bad')"><button class="btn" type="submit">+ 새 업무로 추가</button></form>
       <div class="dr-add"><button class="linkbtn" type="button" data-free="today">+ 업무 등록 없이 직접 입력</button></div>
     </section>
     <section class="panel"><h2 class="sec">03 이슈 / 요청사항 <span class="hist" style="display:inline">@이름을 쓰면 그 사람에게 알림</span></h2>
@@ -1319,6 +1332,7 @@ function bindWrite(){
   $('dr-new').onsubmit = async e => {
     e.preventDefault(); const t=$('dr-new-title').value.trim(); if(!t){ toast('새 업무명을 입력하세요.'); return; }
     const kind=$('dr-new-kind').value, end=$('dr-new-end').value||null;
+    if(end && end<ui.daily.date){ toast(`예상 완료일(${fmtD(pd(end))})이 시작일인 보고일(${fmtD(pd(ui.daily.date))})보다 빨라요. 날짜를 확인하세요.`); $('dr-new-end').classList.add('bad'); $('dr-new-end').focus(); return; }
     const parent = byId['WBS-INBOX'] ? 'WBS-INBOX' : null; if(!parent){ toast('미분류함이 없어요. 관리자에게 문의하세요.'); return; }
     const id = await insertUnder(parent, {cat:t, kind, pic:me.name, st:'In Progress', start_date:ui.daily.date, end_date:end, prog:0, cyc:kind==='R'?'반복':'단발'}, '업무 등록');
     if(!id) return;
@@ -1458,10 +1472,11 @@ async function openDrawer(id, tab){
       <div class="field full"><label for="f-kpi_memo">실적 메모</label><input id="f-kpi_memo" value="${esc(r.kpi_memo||'')}"></div></div>` : '';
   const req = r.sheet==='REQ' && r.lvl!=='L1' ? `
     <div class="subhead">대표님 보고 관리</div><div class="fgrid">
-      <div class="field"><label for="f-req_date">요청일</label><input id="f-req_date" type="date" value="${r.req_date||''}"></div>
-      <div class="field"><label for="f-due_date">보고 기한</label><input id="f-due_date" type="date" value="${r.due_date||''}"></div>
+      <div class="field"><label for="f-req_date">요청일</label><input id="f-req_date" data-dl="요청일" type="date" value="${r.req_date||''}"></div>
+      <div class="field"><label for="f-due_date">보고 기한</label><input id="f-due_date" data-dl="보고 기한" type="date" value="${r.due_date||''}"></div>
       <div class="field full"><label for="f-req_text">요청 원문</label><textarea id="f-req_text">${esc(r.req_text||'')}</textarea></div>
-      <div class="field"><label for="f-done_date">보고 완료일</label><input id="f-done_date" type="date" value="${r.done_date||''}"></div>
+      <div class="field"><label for="f-done_date">보고 완료일</label><input id="f-done_date" data-dl="보고 완료일" type="date" value="${r.done_date||''}"></div>
+      <div class="field full date-err" id="f-reqerr" role="alert" hidden></div>
       <div class="field full"><label for="f-feedback">대표님 피드백</label><textarea id="f-feedback">${esc(r.feedback||'')}</textarea></div></div>` : '';
   const grp = r.lvl==='L1';
   drawer.innerHTML = `
@@ -1493,8 +1508,9 @@ async function openDrawer(id, tab){
         <div class="field"><label for="f-bak">Backup</label><select id="f-bak">${opt(PEOPLE,r.bak)}${extraOpt(PEOPLE,r.bak)}</select></div>
         <div class="field"><label for="f-st">진행 상태</label><select id="f-st">${opt(STATUS,r.st,STATUS.map(s=>ST_KO[s]))}</select></div>
         <div class="field"><label for="f-prog">progress %${ck.n?' (체크리스트 자동)':''}</label><input id="f-prog" type="number" min="0" max="100" step="5" value="${r.prog!=null?Math.round(r.prog*100):''}" ${isTask(r)&&!ck.n?'':'disabled'}></div>
-        <div class="field"><label for="f-start_date">Start</label><input id="f-start_date" type="date" value="${r.start_date||''}" ${isTask(r)?'':'disabled'}></div>
-        <div class="field"><label for="f-end_date">End</label><input id="f-end_date" type="date" value="${r.end_date||''}" ${isTask(r)?'':'disabled'}></div>
+        <div class="field"><label for="f-start_date">Start</label><input id="f-start_date" data-dl="시작일" type="date" value="${r.start_date||''}" ${isTask(r)?'':'disabled'}></div>
+        <div class="field"><label for="f-end_date">End</label><input id="f-end_date" data-dl="종료일" type="date" value="${r.end_date||''}" ${isTask(r)?'':'disabled'}></div>
+        <div class="field full date-err" id="f-daterr" role="alert" hidden></div>
         ${isTask(r)?`<div class="field full"><label class="chk-inline" style="font-size:12px;color:var(--ink)"><input type="checkbox" id="f-is_milestone" ${r.is_milestone?'checked':''}> 마일스톤 (행사일·런칭일처럼 하루짜리 기준일 · End 날짜에 ◆ 표시)</label></div>`:''}
         <div class="field full"><label for="f-memo">최근 메모 (오늘 한 일·막힌 점)</label><input id="f-memo" maxlength="200" value="${esc(r.memo||'')}"></div>
         <div class="field full"><label for="f-note">비고</label><textarea id="f-note">${esc(r.note||'')}</textarea></div>`}
@@ -1521,6 +1537,8 @@ async function openDrawer(id, tab){
   drawer.classList.add('on'); scrim.classList.add('on');
   $('d-close').onclick=closeDrawer; $('d-cancel').onclick=closeDrawer;
   if($('d-save')) $('d-save').onclick=()=>saveDrawer(r);
+  bindDateCheck([['f-start_date','f-end_date']], $('f-daterr'));
+  bindDateCheck([['f-req_date','f-due_date'],['f-req_date','f-done_date']], $('f-reqerr'));
   if($('d-del')) $('d-del').onclick=()=>deleteItem(r);
   if($('d-req')) $('d-req').onclick=()=>requestDelete(r);
   if($('d-unreq')) $('d-unreq').onclick=()=>cancelDelete(r, me.role==='admin'?'반려':'요청 취소');
@@ -1549,6 +1567,8 @@ async function saveDrawer(r){
   if(isTask(r) && st==='Completed' && (pr==null||pr<1)){ patch.prog=1; changes.push('progress: 완료 처리로 100% 자동 반영'); }
   const pSel=$('f-parent'); const newParent = pSel && !pSel.disabled ? pSel.value : r.parent;
   const moving = !!newParent && newParent!==r.parent;
+  const dErr = rangeErr({...r, ...patch});
+  if(dErr){ toast(dErr); const el = drawer.querySelector('input.bad'); if(el){ el.focus(); el.scrollIntoView({block:'center'}); } return; }
   if(!changes.length && !moving){ toast('바뀐 내용이 없습니다.'); return; }
   if(!changes.length && moving){ if(await moveItem(r,newParent)) openDrawer(r.id); return; }
   patch.updated_by = me.name; patch.updated_at = new Date().toISOString();

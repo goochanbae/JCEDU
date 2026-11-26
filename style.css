@@ -604,3 +604,9 @@ tr.task.d3 td.t-name .cat{font-weight:500}
 tr.task.lvl-P.d2 td.t-name .cat{font-weight:700}
 tr.task td.t-name::before{content:none!important}
 tr.task.d2 td.t-name .cat::before,tr.task.d3 td.t-name .cat::before{content:"└ ";color:var(--muted);font-weight:400}
+
+/* 날짜 범위 오류 */
+input[type=date].bad{border-color:var(--bad,#e5484d)!important;background:#fff5f5;box-shadow:0 0 0 2px rgba(229,72,77,.15)}
+.date-err{color:var(--bad,#e5484d);font-size:12px;font-weight:600;margin-top:-4px}
+.date-err:not([hidden]){display:block}
+.date-err::before{content:"⚠ "}
