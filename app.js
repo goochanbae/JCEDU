@@ -196,25 +196,32 @@ function renderDashboard(){
   const work = items.filter(r=>r.lvl!=='L1');
   const w0=new Date(today); w0.setDate(today.getDate()-((today.getDay()+6)%7)); const w1=new Date(w0); w1.setDate(w0.getDate()+6);
   const due = all.filter(r=>{const e=pd(r.end_date); return e&&e>=w0&&e<=w1;}).sort((a,b)=>pd(a.end_date)-pd(b.end_date));
+  const dueOpen = due.filter(r=>!DONE(r.st));
+  const doneRecent = items.filter(r=>isTask(r) && r.st==='Completed' && ts(r.updated_at) >= Date.now()-14*DAY).sort((a,b)=>ts(b.updated_at)-ts(a.updated_at));
   const tile=(k,v,s,cls,go)=>`<button class="tile ${cls||''}" type="button" data-go="${go}"><span class="k">${k}</span><span class="v">${v}</span><span class="s">${s}</span></button>`;
   const prog=(lab,S,go)=>`<button class="tile" type="button" data-go="${go}"><span class="k">${lab} 진척</span><span class="v">${pct(S.actual)}</span><div class="pbar"><i style="width:${S.actual*100}%"></i><b style="left:calc(${Math.min(1,S.plan)*100}% - 1px)"></b></div><span class="s">오늘까지 계획 ${pct(S.plan)} · ${S.actual>=S.plan?'계획 이상':'계획보다 '+Math.round((S.plan-S.actual)*100)+'%p 늦음'}</span></button>`;
   const OTHER='(목록에 없는 이름)';
-  const ppl = [...PEOPLE,OTHER,'(미지정)'].map(p=>{ const mine=work.filter(r=>p==='(미지정)'?!r.pic:p===OTHER?(r.pic&&!PEOPLE.includes(r.pic)):r.pic===p); return {p, cnt:STATUS.map(s=>mine.filter(r=>r.st===s).length), none:mine.filter(r=>!STATUS.includes(r.st)).length, tot:mine.length, late:mine.filter(r=>check(r)==='지연').length, bak:work.filter(r=>p!=='(미지정)'&&p!==OTHER&&r.bak===p).length}; }).filter(x=>x.tot||x.bak||PEOPLE.includes(x.p));
+  // 업무량은 진행 중인 업무만 (완료·취소는 오른쪽 '완료' 수로 따로)
+  const OPEN_ST = STATUS.filter(s=>s!=='Completed' && s!=='Canceled');
+  const ppl = [...PEOPLE,OTHER,'(미지정)'].map(p=>{ const all=work.filter(r=>p==='(미지정)'?!r.pic:p===OTHER?(r.pic&&!PEOPLE.includes(r.pic)):r.pic===p); const mine=all.filter(r=>!DONE(r.st)); return {p, cnt:OPEN_ST.map(s=>mine.filter(r=>r.st===s).length), none:mine.filter(r=>!STATUS.includes(r.st)).length, tot:mine.length, done:all.filter(r=>r.st==='Completed').length, late:mine.filter(r=>check(r)==='지연').length, bak:work.filter(r=>p!=='(미지정)'&&p!==OTHER&&r.bak===p&&!DONE(r.st)).length}; }).filter(x=>x.tot||x.bak||x.done||PEOPLE.includes(x.p));
   const max = Math.max(...ppl.map(x=>x.tot),1);
   $('v-dashboard').innerHTML = `<div class="band">
   <div class="grid-tiles">${prog('WBS',W,'wbs')}${prog('대표님 REQ',R,'req')}
     ${tile('지연',W.late+R.late,'종료일이 지났는데 완료되지 않음','bad','chk:지연')}
     ${tile('임박',W.soon+R.soon,'3일 이내 마감','warn','chk:임박')}
     ${tile('⚠ 확인 필요',W.warn+R.warn,'완료인데 진척률 미달 · 종료일 없음','caution','chk:⚠')}
-    ${tile('이번 주 마감',due.length,`${fmtD(w0)} ~ ${fmtD(w1)}`,'','weekly')}
+    ${tile('이번 주 마감',dueOpen.length,`${fmtD(w0)} ~ ${fmtD(w1)} · 완료 ${due.length-dueOpen.length}건 제외`,'','weekly')}
     ${(()=>{const n=items.filter(r=>r.parent&&/-INBOX$/.test(r.parent)).length; return n?tile('미분류함',n,'WBS 위치 정리가 필요한 새 업무','warn','wbs'):'';})()}
     ${(()=>{const n=items.filter(r=>r.delete_requested_at).length; return n?tile('삭제 대기',n,me.role==='admin'?'승인이 필요한 삭제 요청':'관리자 승인 대기 중','bad','chk:삭제 대기'):'';})()}</div></div>
   <div class="cols">
     <div class="panel"><h2 class="sec">담당자별 업무량</h2>
-      <div class="people">${ppl.map(x=>`<div class="person" title="${esc(x.p)} · 담당 ${x.tot}건 (${STATUS.map((s,i)=>x.cnt[i]?ST_KO[s]+' '+x.cnt[i]:'').filter(Boolean).join(', ')}${x.none?', 상태 없음 '+x.none:''}) · Backup ${x.bak}건"><span class="nm">${esc(x.p)}</span><div class="stack" style="width:${Math.max(x.tot/max*100,2)}%">${x.cnt.map((c,i)=>c?`<span class="s-${ST_CLS[STATUS[i]]}" style="width:${c/x.tot*100}%"></span>`:'').join('')}${x.none?`<span style="width:${x.none/x.tot*100}%;background:var(--line)"></span>`:''}</div><span class="tot">${x.tot}${x.late?` <span style="color:var(--bad)">·${x.late}</span>`:''}</span></div>`).join('')}</div>
-      <div class="legend">${STATUS.map(s=>`<span><i class="s-${ST_CLS[s]}"></i>${ST_KO[s]}</span>`).join('')}<span>PIC 기준 · 상시·단발 업무 모두 포함 (카테고리 제외) · 빨간 수 = 지연 건수 · 막대에 마우스를 올리면 상세</span></div></div>
-    <div class="panel"><h2 class="sec">이번 주 마감 (${fmtD(w0)} ~ ${fmtD(w1)})</h2>
-      ${due.length?`<table style="min-width:0"><thead><tr><th>ID</th><th>업무</th><th>PIC</th><th>상태</th><th>End</th><th></th></tr></thead><tbody>${due.map(r=>`<tr class="task" data-id="${r.id}"><td class="mono">${r.id}</td><td class="t-name"><span class="cat">${esc(r.cat)}</span><span class="tk">${esc(r.task)}</span></td><td class="nw">${esc(r.pic||'')}</td><td>${stChip(r.st)}</td><td class="mono">${fmtD(pd(r.end_date))}</td><td class="nw">${chkChip(check(r))}</td></tr>`).join('')}</tbody></table>`:'<div class="empty">이번 주 마감 업무가 없습니다.</div>'}</div>
+      <div class="people">${ppl.map(x=>`<div class="person pdone" title="${esc(x.p)} · 진행 중인 담당 ${x.tot}건 (${OPEN_ST.map((s,i)=>x.cnt[i]?ST_KO[s]+' '+x.cnt[i]:'').filter(Boolean).join(', ')}${x.none?', 상태 없음 '+x.none:''}) · 완료 ${x.done}건 · Backup ${x.bak}건"><span class="nm">${esc(x.p)}</span><div class="stack" style="width:${Math.max(x.tot/max*100,2)}%">${x.cnt.map((c,i)=>c?`<span class="s-${ST_CLS[OPEN_ST[i]]}" style="width:${c/x.tot*100}%"></span>`:'').join('')}${x.none?`<span style="width:${x.none/x.tot*100}%;background:var(--line)"></span>`:''}</div><span class="tot">${x.tot}${x.late?` <span style="color:var(--bad)">·${x.late}</span>`:''}</span><span class="dn-n" title="완료">완료 ${x.done}</span></div>`).join('')}</div>
+      <div class="legend">${OPEN_ST.map(s=>`<span><i class="s-${ST_CLS[s]}"></i>${ST_KO[s]}</span>`).join('')}<span>진행 중인 업무만 막대로 · 완료는 오른쪽에 따로 · PIC 기준 (카테고리 제외) · 빨간 수 = 지연</span></div></div>
+    <div class="panel"><h2 class="sec">이번 주 마감 (${fmtD(w0)} ~ ${fmtD(w1)}) <span class="hist" style="display:inline">진행 중 ${dueOpen.length}건</span></h2>
+      ${dueOpen.length?`<table style="min-width:0"><thead><tr><th>ID</th><th>업무</th><th>PIC</th><th>상태</th><th>End</th><th></th></tr></thead><tbody>${dueOpen.map(r=>`<tr class="task" data-id="${r.id}"><td class="mono">${r.id}</td><td class="t-name"><span class="cat">${esc(r.cat)}</span><span class="tk">${esc(r.task)}</span></td><td class="nw">${esc(r.pic||'')}</td><td>${stChip(r.st)}</td><td class="mono">${fmtD(pd(r.end_date))}</td><td class="nw">${chkChip(check(r))}</td></tr>`).join('')}</tbody></table>`:'<div class="empty">이번 주에 남은 마감 업무가 없어요.</div>'}</div>
+  </div>
+  <div class="panel" style="margin-top:16px"><h2 class="sec">완료한 업무 <span class="hist" style="display:inline">최근 14일 · ${doneRecent.length}건</span></h2>
+    ${doneRecent.length?`<table style="min-width:0"><thead><tr><th>ID</th><th>업무</th><th>PIC</th><th>마감</th><th>완료</th></tr></thead><tbody>${doneRecent.map(r=>`<tr class="task" data-id="${r.id}"><td class="mono">${r.id}</td><td class="t-name"><span class="cat">${esc(r.cat||'')}${newsChip(r)}</span>${r.task?`<span class="tk">${esc(r.task)}</span>`:''}</td><td class="nw">${esc(r.pic||'')}</td><td class="mono">${r.end_date?fmtD(pd(r.end_date)):'–'}</td><td class="nw hist" style="display:table-cell">${ago(r.updated_at)}</td></tr>`).join('')}</tbody></table>`:'<div class="empty">최근 14일 동안 완료한 업무가 없어요.</div>'}
   </div>`;
 }
 
@@ -376,7 +383,7 @@ const rangeTxt = (s,e,ms) => ms ? `◆ ${fmt(iso(e))}` : `${s?fmt(iso(s)):'–'}
 const G_ZOOM = {wide:26, mid:12, narrow:5};   // 하루당 px
 const addDays = (d,n) => new Date(d.getTime()+n*DAY);
 function renderGantt(){
-  const sheet = ui.ganttSheet, px = G_ZOOM[ui.ganttZoom]||12, onlyMine = ui.ganttMine;
+  const sheet = ui.ganttSheet, px = ui.ganttPx || G_ZOOM[ui.ganttZoom] || 12, onlyMine = ui.ganttMine;
   const vis = r => !onlyMine || r.pic===me.name || r.bak===me.name;
   const dated = items.filter(r=>r.sheet===sheet&&isTask(r)&&(r.start_date||r.end_date)&&vis(r));
   const ds = dated.flatMap(r=>[pd(r.start_date),pd(r.end_date)]).filter(Boolean);
@@ -386,8 +393,10 @@ function renderGantt(){
   const weeks = Math.max(8, Math.ceil((maxE-g0)/DAY/7)+3);
   const days = weeks*7, W = days*px, X = d => Math.round((d-g0)/DAY*px);
   let head='', grid='', pm=-1;
-  for(let k=0;k<weeks;k++){ const d=addDays(g0,k*7), m=d.getMonth(); head+=`<div class="${m!==pm?'m':''}" style="left:${k*7*px}px">${m!==pm?(m+1)+'월 ':''}${d.getDate()}</div>`; grid+=`<div style="left:${k*7*px}px"></div>`; pm=m; }
-  if(px>=G_ZOOM.wide) for(let k=0;k<days;k++) if(k%7) grid+=`<div class="d" style="left:${k*px}px"></div>`;
+  // 확대 정도에 따라 날짜 표시 간격 조절 (좁으면 몇 주마다, 넓으면 날마다)
+  const step = px*7>=44 ? 1 : px*7>=22 ? 2 : 4;
+  for(let k=0;k<weeks;k++){ const d=addDays(g0,k*7), m=d.getMonth(); const nm = m!==pm; if(k%step===0 || nm) head+=`<div class="${nm?'m':''}" style="left:${k*7*px}px">${nm?(m+1)+'월 ':''}${step>1&&!nm?'':d.getDate()}</div>`; grid+=`<div style="left:${k*7*px}px"></div>`; pm=m; }
+  if(px>=18) for(let k=0;k<days;k++) if(k%7){ grid+=`<div class="d" style="left:${k*px}px"></div>`; if(px>=30) head+=`<div class="dd" style="left:${k*px}px">${addDays(g0,k).getDate()}</div>`; }
   const tx = `<div class="g-today" style="left:${X(today)}px" title="오늘"></div>`;
   const bar = r => {
     const s = pd(r.start_date)||pd(r.end_date), e = pd(r.end_date)||s;
@@ -409,21 +418,35 @@ function renderGantt(){
   }
   $('v-gantt').innerHTML = `<div class="toolbar">
       <select id="g-sheet" aria-label="시트"><option value="WBS" ${sheet==='WBS'?'selected':''}>WBS</option><option value="REQ" ${sheet==='REQ'?'selected':''}>대표님 REQ</option></select>
-      <div class="vt" role="group" aria-label="확대"><button type="button" data-gz="narrow" class="${ui.ganttZoom==='narrow'?'on':''}">분기</button><button type="button" data-gz="mid" class="${ui.ganttZoom==='mid'?'on':''}">월</button><button type="button" data-gz="wide" class="${ui.ganttZoom==='wide'?'on':''}">주</button></div>
+      <div class="vt" role="group" aria-label="확대">${[['narrow','분기'],['mid','월'],['wide','주']].map(([k,l])=>`<button type="button" data-gz="${k}" class="${Math.abs(px-G_ZOOM[k])<.5?'on':''}">${l}</button>`).join('')}</div>
       <label class="chk-inline"><input type="checkbox" id="g-mine" ${onlyMine?'checked':''}> 내 업무만</label>
       <button class="btn" type="button" id="g-today">오늘로</button>
       <div class="legend" style="margin:0"><span><i class="s-ip"></i>진행 중</span><span><i class="s-pl"></i>예정</span><span><i class="s-oh"></i>보류</span><span><i class="s-co"></i>완료</span><span><i style="background:var(--bad)"></i>지연</span><span>◆ 마일스톤 · 초록 세로선 = 오늘</span></div>
-      <span class="count">막대를 끌면 일정 이동 · 양 끝을 끌면 시작·마감 조절 (내 업무만)</span></div>
+      <span class="count">날짜 줄 위에서 휠 또는 Ctrl+휠: 기간 늘리기·줄이기 · 막대를 끌면 일정 이동 · 양 끝을 끌면 시작·마감 조절 (내 업무만)</span></div>
     <div class="gantt" id="g-box"><div class="g-head" style="grid-template-columns:300px ${W}px;width:${300+W}px"><div class="g-lab">업무</div><div class="g-weeks">${head}</div></div>${rows.replace(/class="g-row/g,`style="grid-template-columns:300px ${W}px;width:${300+W}px" class="g-row`)||'<div class="empty">일정이 있는 업무가 없어요.</div>'}</div>
     <div class="g-tip hidden" id="g-tip"></div>`;
   $('g-sheet').onchange = e => { ui.ganttSheet=e.target.value; renderGantt(); };
   $('g-mine').onchange = e => { ui.ganttMine=e.target.checked; renderGantt(); };
-  document.querySelectorAll('[data-gz]').forEach(b=>b.onclick=()=>{ ui.ganttZoom=b.dataset.gz; ui.ganttScrolled=false; renderGantt(); });
+  document.querySelectorAll('[data-gz]').forEach(b=>b.onclick=()=>{ ui.ganttZoom=b.dataset.gz; ui.ganttPx=G_ZOOM[b.dataset.gz]; ui.ganttScrolled=false; renderGantt(); });
   const box = $('g-box');
   const scrollToday = () => { box.scrollLeft = Math.max(0, X(today) - (box.clientWidth-300)/3); };
   $('g-today').onclick = scrollToday;
-  if(!ui.ganttScrolled){ scrollToday(); ui.ganttScrolled = true; }
+  if(ui.ganttAnchor){ const a = ui.ganttAnchor; ui.ganttAnchor = null; box.scrollLeft = Math.max(0, (a.day - (g0-a.g0)/DAY) * px - a.x); box.scrollTop = a.top; }
+  else if(!ui.ganttScrolled){ scrollToday(); ui.ganttScrolled = true; }
   bindGanttDrag(box, px);
+  // 마우스 휠로 기간 확대·축소: 날짜 줄 위에서는 그냥 휠, 그 외에서는 Ctrl(⌘)+휠 (트랙패드 핀치 포함). 가리킨 날짜를 기준으로
+  box.addEventListener('wheel', e => {
+    if(!(e.ctrlKey || e.metaKey || e.target.closest('.g-head'))) return;
+    e.preventDefault();
+    if(ui.ganttWheelBusy) { ui.ganttWheelAcc = (ui.ganttWheelAcc||0) + e.deltaY; return; }
+    const rect = box.getBoundingClientRect(), x = Math.max(0, e.clientX - rect.left - 300);
+    const dy = e.deltaY + (ui.ganttWheelAcc||0); ui.ganttWheelAcc = 0;
+    const np = Math.min(48, Math.max(2, px * Math.exp(-dy * 0.0018)));
+    if(Math.abs(np-px) < .05) return;
+    ui.ganttAnchor = {day:(box.scrollLeft + x)/px, x, g0, top:box.scrollTop};
+    ui.ganttPx = np; ui.ganttWheelBusy = true;
+    requestAnimationFrame(()=>{ renderGantt(); ui.ganttWheelBusy = false; });
+  }, {passive:false});
 }
 function bindGanttDrag(box, px){
   let drag = null;
@@ -479,7 +502,8 @@ function calItems(){
   const f = ui.cal;
   // 기본: 단발·행사 업무와 마일스톤만 (몇 달씩 이어지는 상시 업무는 달력을 가려서 '전체'에서만)
   const evt = r => r.is_milestone || !r.cyc || r.cyc==='단발' || r.cyc==='행사별' || (()=>{ const s=pd(r.start_date), e=pd(r.end_date); return s&&e&&(e-s)/DAY<=31; })();
-  return items.filter(r=>isTask(r) && (r.start_date||r.end_date) && r.st!=='Canceled' && (f.scope==='all' || evt(r))
+  const inScope = r => f.scope==='all' ? true : f.scope==='P' ? (r.kind==='P' || (!r.kind && r.cyc==='단발')) : f.scope==='R' ? r.kind==='R' : evt(r);
+  return items.filter(r=>isTask(r) && (r.start_date||r.end_date) && r.st!=='Canceled' && inScope(r)
     && (!f.sheet || r.sheet===f.sheet)
     && (!f.who || (f.who==='@me' ? (r.pic===me.name||r.bak===me.name) : r.pic===f.who))
     && (!f.brand || r.brand===f.brand));
@@ -506,7 +530,7 @@ function renderCal(){
     let cells = '';
     for(let d=0; d<7; d++){
       const day = addDays(w0,d), out = day.getMonth()!==f.m, isT = +day===+today, we = d>=5;
-      cells += `<div class="cal-d ${out?'out':''} ${isT?'today':''} ${we?'we':''}" style="grid-column:${d+1};grid-row:1 / span ${CAL_LANES+2}"><span class="dn">${day.getDate()}</span></div>`;
+      cells += `<div class="cal-d ${out?'out':''} ${isT?'today':''} ${we?'we':''}" style="grid-column:${d+1};grid-row:1 / span ${CAL_LANES+2}"><div class="dh"><span class="dn">${day.getDate()}</span>${day.getDate()===1||(w===0&&d===0)?`<span class="dm">${day.getMonth()+1}월</span>`:''}${isT?'<span class="dt">오늘</span>':''}</div></div>`;
       if(more[d]) cells += `<button type="button" class="cal-more" data-day="${iso(day)}" style="grid-column:${d+1};grid-row:${CAL_LANES+2}">+${more[d]}건 더보기</button>`;
     }
     const bars = placed.map(sg=>{
@@ -514,7 +538,7 @@ function renderCal(){
       const cls = [BRAND_CLS[r.brand]||'b0', r.st==='Completed'?'done':'', c==='지연'?'late':'', sg.s<w0?'cont-l':'', sg.e>w1?'cont-r':'', r.is_milestone?'ms':''].join(' ');
       return `<button type="button" class="cal-bar ${cls}" data-open="${r.id}" style="grid-column:${sg.a+1} / ${sg.b+2};grid-row:${sg.li+2}" title="${esc(titleOf(r))} · ${esc(r.brand||'')} · PIC ${esc(r.pic||'–')} · ${fmtD(sg.s)}~${fmtD(sg.e)} · ${ST_KO[r.st]||''}">${r.is_milestone?'◆ ':''}${esc(r.cat||r.task||'')}${r.pic&&f.who!=='@me'?` <span class="who">${esc(r.pic)}</span>`:''}</button>`;
     }).join('');
-    weeksHtml += `<div class="cal-w" style="grid-template-rows:24px repeat(${CAL_LANES},22px) 20px">${cells}${bars}</div>`;
+    weeksHtml += `<div class="cal-w" style="grid-template-rows:40px repeat(${CAL_LANES},24px) 22px">${cells}${bars}</div>`;
   }
   const brands = [...new Set(items.filter(isTask).map(r=>r.brand).filter(Boolean))];
   const opt = (v,l,sel) => `<option value="${esc(v)}" ${v===sel?'selected':''}>${esc(l)}</option>`;
@@ -524,7 +548,7 @@ function renderCal(){
       <b class="cal-title">${f.y}년 ${f.m+1}월</b>
       <button class="btn" type="button" data-cm="1" aria-label="다음 달">›</button>
       <button class="btn" type="button" data-cm="0">이번 달</button>
-      <div class="vt" role="group" aria-label="표시 범위"><button type="button" data-cs="event" class="${f.scope!=='all'?'on':''}" title="단발·행사 업무, 한 달 이내 업무, 마일스톤">캠페인·행사</button><button type="button" data-cs="all" class="${f.scope==='all'?'on':''}" title="상시 업무 포함">전체</button></div>
+      <div class="vt" role="group" aria-label="표시 범위">${[['event','캠페인·행사','행사·단발 업무, 한 달 이내 업무, 마일스톤'],['P','단발 (P)','기간이 있는 프로젝트 업무'],['R','루틴 (R)','반복 업무 (SNS 업로드·리포트 등)'],['all','전체','목표·상시 업무 포함']].map(([k,l,t])=>`<button type="button" data-cs="${k}" class="${(f.scope||'event')===k?'on':''}" title="${t}">${l}</button>`).join('')}</div>
       <select id="cal-sheet" aria-label="구분">${opt('','WBS + 대표님 REQ',f.sheet)}${opt('WBS','WBS',f.sheet)}${opt('REQ','대표님 REQ',f.sheet)}</select>
       <select id="cal-who" aria-label="담당">${opt('','전체 담당자',f.who)}${opt('@me','내 업무 (PIC·Backup)',f.who)}${PEOPLE.map(p=>opt(p,p,f.who)).join('')}</select>
       <select id="cal-brand" aria-label="브랜드">${opt('','전체 브랜드',f.brand)}${brands.map(b=>opt(b,b,f.brand)).join('')}</select>
@@ -626,7 +650,9 @@ function renderMy(){
   const late = open.filter(r=>check(r)==='지연'), week = open.filter(inWeek), ip = open.filter(r=>r.st==='In Progress'), st = open.filter(stale);
   const todayN = open.filter(r=>{ const e=pd(r.end_date); return check(r)==='지연' || (e && e<=today); }).length;
   const FILTERS = {late:['지연',late], week:['이번 주 마감',week], ip:['진행 중',ip], stale:['업데이트 필요',st]};
-  let list = f.filter && FILTERS[f.filter] ? FILTERS[f.filter][1] : (f.done ? mineAll : open);
+  let list = f.filter && FILTERS[f.filter] ? FILTERS[f.filter][1] : open;
+  // 완료한 업무는 따로 (최근 30일, 최근 완료 순)
+  const doneL = mineAll.filter(r=>r.st==='Completed' && ts(r.updated_at) >= Date.now()-30*DAY).sort((a,b)=>ts(b.updated_at)-ts(a.updated_at));
   list = [...list].sort((a,b)=>{ const x=focusRank(a), y=focusRank(b); return x[0]-y[0] || x[1]-y[1]; });
   const tile = (k,label,arr,cls,sub) => `<button class="tile ${cls||''} ${f.filter===k?'on':''}" type="button" data-myf="${k}"><span class="k">${label}</span><span class="v">${arr.length}</span><span class="s">${sub}</span></button>`;
   const bak = items.filter(r=>isTask(r) && r.kind!=='goal' && r.bak===me.name && !DONE(r.st));
@@ -655,14 +681,20 @@ function renderMy(){
       ${tile('stale','업데이트 필요',st,'caution',`진행 중인데 ${STALE_DAYS}일 넘게 그대로`)}
     </div></div>
     <div class="my-grid">
+      <div class="my-maincol">
       <div class="panel" style="padding:0">
         <div class="ph"><b>${f.filter?esc(FILTERS[f.filter][0]):'오늘 집중'}</b>
           <span class="hist" style="display:inline">${f.filter?`<button type="button" class="linkbtn" data-myf="">필터 해제</button>`:'지연 → 마감 가까운 순'}</span>
           <div class="spacer"></div>
-          ${f.view==='list'&&!f.filter?`<label class="chk-inline"><input type="checkbox" id="my-done" ${f.done?'checked':''}> 완료 포함</label>`:''}
+
           <div class="vt" role="group" aria-label="보기"><button type="button" data-myv="list" class="${f.view==='list'?'on':''}">목록</button><button type="button" data-myv="board" class="${f.view==='board'?'on':''}">보드</button></div>
         </div>
         ${f.view==='board' ? `<div style="padding:12px">${board()}</div>` : (list.length ? `<div class="mylist">${list.map(myRow).join('')}</div>` : `<div class="empty">${mineAll.length?'해당하는 업무가 없어요.':'내가 PIC인 업무가 아직 없어요. 오른쪽 위 \'+ 업무 등록\'으로 시작하세요.'}</div>`)}
+      </div>
+      ${f.view==='list' ? `<div class="panel done-panel" style="padding:0">
+        <button type="button" class="ph done-h" id="my-donetoggle" aria-expanded="${!!f.showDone}"><b>완료한 업무</b><span class="hist" style="display:inline">최근 30일 · ${doneL.length}건</span><div class="spacer"></div><span class="hist" style="display:inline">${f.showDone?'접기 ▴':'펼치기 ▾'}</span></button>
+        ${f.showDone ? (doneL.length ? `<div class="mylist done-list">${doneL.map(r=>`<div class="mrow"><div class="mt"><button type="button" class="t" data-open="${r.id}">${esc(titleOf(r))}</button>${newsChip(r)}<div class="sub">${[r.brand, r.end_date&&'마감 '+fmtD(pd(r.end_date)), '완료 '+ago(r.updated_at)].filter(Boolean).map(esc).join(' · ')}${cmtBtn(r)}</div></div>${owns(r)?`<button type="button" class="btn" data-reopen="${r.id}">다시 진행</button>`:''}</div>`).join('')}</div>` : '<div class="empty">최근 30일 동안 완료한 업무가 없어요.</div>') : ''}
+      </div>` : ''}
       </div>
       <div class="side">
         <div class="panel"><h2 class="sec">내가 백업인 업무 <span class="hist" style="display:inline">${bak.length}건</span></h2>
@@ -708,6 +740,8 @@ function bindMy(){
     const fl = e.target.closest('[data-myf]'); if(fl){ ui.my.filter = ui.my.filter===fl.dataset.myf ? '' : fl.dataset.myf; if(ui.my.filter) ui.my.view='list'; renderMy(); return; }
     const vv = e.target.closest('[data-myv]'); if(vv){ ui.my.view = vv.dataset.myv; if(vv.dataset.myv==='board') ui.my.filter=''; try{localStorage.setItem('jcwbs-myview',ui.my.view);}catch(_){}; renderMy(); return; }
     if(e.target.id==='my-add'){ openQuickAdd(); return; }
+    if(e.target.closest('#my-donetoggle')){ ui.my.showDone = !ui.my.showDone; renderMy(); return; }
+    const ro = e.target.closest('[data-reopen]'); if(ro){ const r=byId[ro.dataset.reopen]; if(r && await quickUpdate(r,{st:'In Progress', prog:Math.min(r.prog??.9, .9)})) toast('다시 진행 중으로 바꿨어요.'); renderMy(); return; }
     if(e.target.id==='my-report'){ const t=myReport(); try{ await navigator.clipboard.writeText(t); toast('내 주간보고를 복사했어요. 메신저나 메일에 붙여넣으세요.'); }catch(_){ openText('내 주간보고', t); } return; }
     const row = e.target.closest('[data-row]'); if(!row) return; const r = byId[row.dataset.row]; if(!r) return;
     const pg = e.target.closest('[data-pg]');
@@ -721,7 +755,6 @@ function bindMy(){
     }
   });
   el.addEventListener('change', async e => {
-    if(e.target.id==='my-done'){ ui.my.done = e.target.checked; renderMy(); return; }
     if(e.target.matches('[data-st]')){ const r = byId[e.target.closest('[data-row]').dataset.row]; if(await quickUpdate(r,{st:e.target.value})) toast(`${ST_KO[r.st]}(으)로 바꿨어요.`); renderMy(); }
   });
   // 보드: 카드를 다른 칸으로 끌어 놓으면 상태 변경

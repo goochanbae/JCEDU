@@ -554,3 +554,30 @@ a.btn{text-decoration:none;color:inherit;display:inline-flex;align-items:center}
 }
 @media (max-width:1000px){.dr-grid,.dr-team{grid-template-columns:minmax(0,1fr)}}
 @media (max-width:600px){.dr-pr{grid-template-columns:auto minmax(0,1fr);row-gap:6px}.dr-pr input[type=date]{grid-column:2;width:150px}.dr-pr .chip,.dr-pr .linkbtn{grid-column:2;justify-self:start}.dr-pk span:nth-of-type(2){flex-basis:100%}}
+/* 팀 현황: 완료 수 따로 */
+.person.pdone{grid-template-columns:70px 1fr 40px 56px}
+.person .dn-n{font-size:11px;color:var(--ok);text-align:right;font-variant-numeric:tabular-nums}
+/* 내 업무: 완료한 업무 */
+.my-maincol{display:flex;flex-direction:column;gap:16px;min-width:0}
+.done-h{display:flex;width:100%;border:0;background:none;text-align:left;cursor:pointer;border-radius:var(--r-lg)}
+.done-h:hover{background:var(--surface-soft)}
+.done-list .mrow{grid-template-columns:minmax(0,1fr) auto}
+.done-list .t{color:var(--muted)!important;text-decoration:line-through;text-decoration-color:var(--line)}
+/* 캘린더: 날짜 줄을 크게, 업무 막대와 구분 */
+.cal-w{grid-template-columns:repeat(7,minmax(0,1fr));row-gap:3px}
+.cal-d{padding:0;display:flex;flex-direction:column}
+.cal-d .dh{display:flex;align-items:center;gap:6px;height:40px;padding:0 10px;border-bottom:1px dashed var(--line)}
+.cal-d .dn{font-size:20px;font-weight:800;letter-spacing:-.03em;line-height:1;font-variant-numeric:tabular-nums;color:var(--ink)}
+.cal-d .dm{font-size:11px;font-weight:700;color:var(--muted)}
+.cal-d .dt{font-size:10px;font-weight:800;background:#000;color:var(--mint);border-radius:999px;padding:2px 7px;margin-left:auto}
+.cal-d.out .dn{color:var(--muted);opacity:.5}
+.cal-d.we .dn{color:var(--bad)}
+.cal-d.today{background:var(--accent-soft)}
+.cal-d.today .dn{background:none;color:var(--ink);box-shadow:none;padding:0;border-radius:0;text-decoration:underline;text-decoration-color:var(--mint);text-decoration-thickness:4px;text-underline-offset:3px}
+.cal-hd div{font-size:12px;padding:8px 10px}
+.cal-bar{height:22px;line-height:22px;font-size:11.5px;margin:0 4px;box-shadow:inset 3px 0 0 rgba(0,0,0,.18)}
+.cal-bar.cont-l{box-shadow:none}
+.cal-more{font-size:11.5px}
+/* 간트: 날짜 표시 */
+.g-weeks div.dd{border-left:0;font-size:9.5px;color:var(--muted);padding:20px 0 0 2px;opacity:.8}
+.g-head .g-weeks{cursor:zoom-in}
