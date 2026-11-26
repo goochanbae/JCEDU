@@ -592,3 +592,15 @@ tr.drop-into td{background:var(--accent-soft)!important;box-shadow:inset 0 0 0 1
 tr.drop-no td{background:var(--bad-soft)!important}
 tr.task.flash td{animation:rowflash 1.6s ease-out}
 @keyframes rowflash{0%,40%{background:var(--accent-soft);box-shadow:inset 3px 0 0 var(--mint-deep)}100%{background:transparent}}
+
+/* 업무 단계 들여쓰기: 업무 / 하위 업무 / 세부 업무 */
+tr.task.d1 td.t-name{padding-left:10px}
+tr.task.d1 td.t-name::before{content:none}
+tr.task.d2 td.t-name{padding-left:30px}
+tr.task.d2 td.t-name::before{content:"└ ";color:var(--muted)}
+tr.task.d3 td.t-name{padding-left:54px}
+tr.task.d3 td.t-name::before{content:"└ ";color:var(--muted)}
+tr.task.d3 td.t-name .cat{font-weight:500}
+tr.task.lvl-P.d2 td.t-name .cat{font-weight:700}
+tr.task td.t-name::before{content:none!important}
+tr.task.d2 td.t-name .cat::before,tr.task.d3 td.t-name .cat::before{content:"└ ";color:var(--muted);font-weight:400}

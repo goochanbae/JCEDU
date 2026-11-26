@@ -37,6 +37,13 @@ const fmtD = d => d ? `${d.getMonth()+1}/${d.getDate()}` : '';
 const pct = v => v==null||isNaN(v) ? '–' : Math.round(v*100)+'%';
 const ddTxt = d => d==null ? '' : d===0 ? 'D-day' : d>0 ? 'D-'+d : 'D+'+(-d);
 const isTask = r => r.lvl==='T' || r.lvl==='C';
+// 단계: 카테고리 0 · 업무 1 · 하위 업무 2 · 세부 업무 3 (최대)
+const MAX_DEPTH = 3;
+const depthOf = r => { let d = 0, x = r; while(x && x.lvl!=='L1' && d<10){ d++; x = byId[x.parent]; } return d; };
+const heightOf = r => { const ks = items.filter(x=>x.parent===r.id); return ks.length ? 1 + Math.max(...ks.map(heightOf)) : 0; };
+// 하위가 없어질 때 돌아갈 단계: 카테고리 바로 아래면 T, 아니면 C
+const leafLvl = r => { const p = byId[r.parent]; return !p || p.lvl==='L1' ? 'T' : 'C'; };
+const DEPTH_KO = ['카테고리','업무','하위 업무','세부 업무'];
 const canEdit = () => me && (me.role==='admin' || me.role==='member');
 // 이 업무를 고칠 수 있는가: 관리자 전체, 팀원은 내가 PIC·Backup·등록자이거나 '전원' 업무 (DB 트리거와 같은 규칙)
 const owns = r => !!me && !!r && (me.role==='admin' || (me.role==='member' && (r.pic===me.name || r.bak===me.name || r.created_by===me.name || r.pic==='전원')));
@@ -281,7 +288,7 @@ function renderTable(sheet, bodyOnly){
     if(col) continue;
     for(const r of vis){
       const a2 = r.lvl==='P' ? groupAgg(r) : null;
-      body += `<tr class="task lvl-${r.lvl}${r.id===selId?' sel':''}" data-id="${r.id}" ${owns(r)?'draggable="true" title="끌어서 위치 옮기기"':''}>
+      body += `<tr class="task lvl-${r.lvl} d${depthOf(r)}${r.id===selId?' sel':''}" data-id="${r.id}" ${owns(r)?'draggable="true" title="끌어서 위치 옮기기"':''}>
         <td class="mono">${r.id}</td><td class="mono" style="color:var(--muted)">${esc(r.num)}</td>
         <td class="t-name"><span class="cat">${r.kind?`<span class="kt kt-${r.kind}">${r.kind==='goal'?'목표':r.kind}</span>`:''}${esc(r.cat||'')}${delChip(r)}${newsChip(r)}${cmtBtn(r,true)}</span><span class="tk">${esc(r.task||'')}</span></td>
         ${colOrder.map(k=>`<td class="${MOVABLE[k].cls||''}">${MOVABLE[k].cell(r,a2)}</td>`).join('')}</tr>`;
@@ -791,9 +798,9 @@ function openText(title, text){
 // ---- 빠른 업무 등록: 업무명 + 마감일만 있으면 등록. 위치를 비우면 미분류함
 function placeOptions(sheet, sel){
   const inbox = items.find(x=>x.id===`${sheet}-INBOX`);
-  const opts = items.filter(x=>x.sheet===sheet && x.id!==`${sheet}-INBOX` && (x.lvl==='L1' || x.lvl==='T' || x.lvl==='P'));
+  const opts = items.filter(x=>x.sheet===sheet && x.id!==`${sheet}-INBOX` && (x.lvl==='L1' || (x.lvl!=='L1' && depthOf(x) < MAX_DEPTH)));
   return (inbox?`<option value="${inbox.id}" ${!sel||sel===inbox.id?'selected':''}>미분류함 (위치는 나중에 관리자가 정리)</option>`:'<option value="">위치를 고르세요</option>')
-    + opts.map(x=>`<option value="${x.id}" ${x.id===sel?'selected':''}>${x.lvl==='L1'?'■ ':'　└ '}${esc(x.num)} ${esc(x.cat||'')}</option>`).join('');
+    + opts.map(x=>`<option value="${x.id}" ${x.id===sel?'selected':''}>${x.lvl==='L1'?'■ ':'　'.repeat(depthOf(x))+'└ '}${esc(x.num)} ${esc(x.cat||'')}</option>`).join('');
 }
 function openQuickAdd(){
   if(!canEdit()) return; selId=null;
@@ -839,6 +846,7 @@ function openQuickAdd(){
 // 상위 항목 아래에 새 업무 추가 (번호·순서·계층 자동). 성공하면 새 id
 async function insertUnder(parentId, fields, label){
   const p = byId[parentId]; if(!p){ toast('위치를 찾지 못했어요. 새로고침 후 다시 시도하세요.'); return null; }
+  if(depthOf(p) >= MAX_DEPTH){ toast(`세부 업무 아래에는 더 넣을 수 없어요 (최대 ${MAX_DEPTH}단계).`); return null; }
   const sheet = p.sheet, pref = sheet==='WBS'?'W':'R';
   const nums = items.filter(r=>r.sheet===sheet && r.id.startsWith(pref+'-')).map(r=>parseInt(r.id.slice(2),10)).filter(n=>!isNaN(n));
   const id = `${pref}-${String((nums.length?Math.max(...nums):0)+1).padStart(3,'0')}`;
@@ -851,7 +859,7 @@ async function insertUnder(parentId, fields, label){
   if(!row.pic) row.pic = me.name; if(!row.brand) row.brand = p.brand||'공통';
   const { data, error } = await sb.from('items').insert(row).select();
   if(error){ toast('등록하지 못했어요: '+error.message); return null; }
-  if(p.lvl==='T'){ await sb.from('items').update({lvl:'P', updated_by:me.name, updated_at:new Date().toISOString()}).eq('id',p.id); p.lvl='P'; }
+  if(p.lvl==='T' || p.lvl==='C'){ await sb.from('items').update({lvl:'P', updated_by:me.name, updated_at:new Date().toISOString()}).eq('id',p.id); p.lvl='P'; }
   await sb.from('item_history').insert({item_id:id, changed_by:me.name, changes:`${label||'업무 추가'} (${p.cat} 하위)`});
   items.push(norm(data[0])); index();
   return id;
@@ -1491,7 +1499,7 @@ async function openDrawer(id, tab){
         <div class="field full"><label for="f-memo">최근 메모 (오늘 한 일·막힌 점)</label><input id="f-memo" maxlength="200" value="${esc(r.memo||'')}"></div>
         <div class="field full"><label for="f-note">비고</label><textarea id="f-note">${esc(r.note||'')}</textarea></div>`}
       </div>${kpi}${req}</fieldset>
-      ${!grp && canEdit() && r.lvl!=='C' ? `<button class="addbtn" type="button" id="d-addchild" style="align-self:flex-start;margin:0">+ 이 업무 아래에 하위 업무 추가</button>`:''}
+      ${!grp && canEdit() && depthOf(r) < MAX_DEPTH ? `<button class="addbtn" type="button" id="d-addchild" style="align-self:flex-start;margin:0">+ 이 업무 아래에 ${DEPTH_KO[depthOf(r)+1]} 추가</button>`:''}
       </div>
       ${grp?'':`<div class="dpane" data-pane="cmt">${commentsHtml(r)}</div>`}
       <div class="dpane" data-pane="daily"><div class="cmts" id="d-daily"><div class="hist">불러오는 중…</div></div></div>
@@ -1566,9 +1574,9 @@ async function addItem(parentId){
 // ---- 상위 항목 이동
 function parentOptions(r){
   const sub = new Set([r.id, ...desc(r.id).map(x=>x.id)]);
-  const hasKids = desc(r.id).length > 0;
-  const opts = items.filter(x => x.sheet===r.sheet && !sub.has(x.id) && (x.lvl==='L1' || (!hasKids && (x.lvl==='T'||x.lvl==='P'))));
-  return opts.map(x => `<option value="${x.id}" ${x.id===r.parent?'selected':''}>${x.lvl==='L1'?'■ ':'　└ '}${esc(x.num)} ${esc(x.cat||'')}</option>`).join('');
+  const h = heightOf(r);
+  const opts = items.filter(x => x.sheet===r.sheet && !sub.has(x.id) && (x.lvl==='L1' || depthOf(x) + 1 + h <= MAX_DEPTH));
+  return opts.map(x => `<option value="${x.id}" ${x.id===r.parent?'selected':''}>${x.lvl==='L1'?'■ ':'　'.repeat(depthOf(x))+'└ '}${esc(x.num)} ${esc(x.cat||'')}</option>`).join('');
 }
 // ---- 업무 위치 옮기기: target 앞(before) / 뒤(after) / 안(into: 그 항목의 맨 아래 하위로). 형제 번호는 순서대로 다시 매김
 function placeCheck(r, target, mode){
@@ -1578,8 +1586,7 @@ function placeCheck(r, target, mode){
   if(desc(r.id).some(x=>x.id===target.id)) return '자기 하위 업무 안으로는 옮길 수 없어요.';
   const np = mode==='into' ? target : byId[target.parent];
   if(!np) return '옮길 위치를 찾지 못했어요.';
-  if(mode==='into' && target.lvl==='C') return '하위 업무 안에는 넣을 수 없어요 (최대 3단계).';
-  if(np.lvl!=='L1' && desc(r.id).length) return '하위 업무가 있는 항목은 카테고리 바로 아래로만 옮길 수 있어요.';
+  if(depthOf(np) + 1 + heightOf(r) > MAX_DEPTH) return `거기로 옮기면 ${MAX_DEPTH}단계(업무 → 하위 → 세부)를 넘어요.`;
   if(mode!=='into' && np.id===r.parent){ const sib = kids(np.id); const i = sib.indexOf(target), j = sib.indexOf(r); if((mode==='before' && i===j+1) || (mode==='after' && i===j-1)) return '이미 그 위치에 있어요.'; }
   return '';
 }
@@ -1607,10 +1614,10 @@ async function placeItem(r, target, mode){
   const stamp = {updated_by:me.name, updated_at:new Date().toISOString()};
   const patch = {};   // id -> 바뀌는 값
   const put = (id, p) => { patch[id] = {...(patch[id]||{}), ...p}; };
-  put(r.id, {parent:np.id, lvl: np.lvl==='L1' ? (kidsAll.length?'P':'T') : 'C', sort_order: lo+step});
+  put(r.id, {parent:np.id, lvl: kidsAll.length ? 'P' : (np.lvl==='L1' ? 'T' : 'C'), sort_order: lo+step});
   kidsAll.sort((a,b)=>a.sort_order-b.sort_order).forEach((k,i)=>put(k.id, {sort_order: lo+step*(i+2)}));
-  if(np.lvl==='T') put(np.id, {lvl:'P'});
-  if(old && old.id!==np.id && old.lvl==='P' && kids(old.id).filter(x=>x.id!==r.id).length===0) put(old.id, {lvl:'T'});
+  if(np.lvl==='T' || np.lvl==='C') put(np.id, {lvl:'P'});
+  if(old && old.id!==np.id && old.lvl==='P' && kids(old.id).filter(x=>x.id!==r.id).length===0) put(old.id, {lvl:leafLvl(old)});
   // 번호 다시 매기기 (새 상위, 옛 상위의 형제와 그 하위)
   const so = x => patch[x.id] && patch[x.id].sort_order!=null ? patch[x.id].sort_order : x.sort_order;
   const parentOf = x => patch[x.id] && patch[x.id].parent ? patch[x.id].parent : x.parent;
@@ -1636,7 +1643,7 @@ function bindRowDrag(tbody){
     if(tr.dataset.g) return {t, mode:'into'};
     if(y < .3) return {t, mode:'before'};
     if(y > .7) return {t, mode:'after'};
-    return {t, mode: t.lvl==='C' ? (y<.5?'before':'after') : 'into'};
+    return {t, mode: depthOf(t) >= MAX_DEPTH ? (y<.5?'before':'after') : 'into'};
   };
   const clear = () => tbody.querySelectorAll('.drop-before,.drop-after,.drop-into,.drop-no').forEach(x=>x.classList.remove('drop-before','drop-after','drop-into','drop-no'));
   tbody.addEventListener('dragstart', e => {
@@ -1719,7 +1726,7 @@ async function deleteItem(r){
     if(error){ toast('삭제하지 못했습니다: '+error.message); await loadItems(); rerender(); return; }
     await sb.from('item_history').insert({item_id:x.id, changed_by:me.name, changes:`삭제${r.delete_requested_by?` (요청: ${r.delete_requested_by})`:''}: ${x.cat||''} / ${x.task||''}`});
   }
-  if(old && old.lvl==='P' && kids(old.id).filter(x=>x.id!==r.id).length===0) await sb.from('items').update({lvl:'T', updated_by:me.name, updated_at:new Date().toISOString()}).eq('id',old.id);
+  if(old && old.lvl==='P' && kids(old.id).filter(x=>x.id!==r.id).length===0) await sb.from('items').update({lvl:leafLvl(old), updated_by:me.name, updated_at:new Date().toISOString()}).eq('id',old.id);
   await loadItems(); toast(`${r.lvl==='L1'?'카테고리':r.id}를 삭제했습니다.`); closeDrawer();
 }
 
