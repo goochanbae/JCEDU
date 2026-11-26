@@ -1464,7 +1464,7 @@ async function openDrawer(id, tab){
         <div class="field full"><label for="f-task">Task</label><textarea id="f-task">${esc(r.task||'')}</textarea></div>
         <div class="field"><label for="f-output">Output / Check</label><input id="f-output" value="${esc(r.output||'')}"></div>
         <div class="field"><label for="f-link">산출물 링크${/^https?:\/\//.test(r.link||'')?` · <a href="${esc(r.link)}" target="_blank" rel="noopener noreferrer">열기</a>`:''}</label><input id="f-link" placeholder="NAS 경로 또는 URL" value="${esc(r.link||'')}"></div>
-        ${isTask(r)?`<div class="field"><label for="f-kind">유형</label><select id="f-kind"><option value="P" ${r.kind==='P'||!r.kind?'selected':''}>P 프로젝트</option><option value="R" ${r.kind==='R'?'selected':''}>R 반복(루틴)</option><option value="goal" ${r.kind==='goal'?'selected':''}>목표·R&amp;R (일정 체크 제외)</option></select></div>`:''}
+        ${!grp?`<div class="field"><label for="f-kind">유형${r.lvl==='P'?' (상위 업무)':''}</label><select id="f-kind">${r.kind?'':'<option value="" selected>미지정</option>'}<option value="P" ${r.kind==='P'?'selected':''}>P 프로젝트</option><option value="R" ${r.kind==='R'?'selected':''}>R 반복(루틴)</option><option value="goal" ${r.kind==='goal'?'selected':''}>목표·R&amp;R (일정 체크 제외)</option></select></div>`:''}
         <div class="field"><label for="f-brand">브랜드</label><select id="f-brand">${opt(BRANDS,r.brand)}${extraOpt(BRANDS,r.brand)}</select></div>
         <div class="field"><label for="f-cyc">주기</label><input id="f-cyc" list="cyc-list" value="${esc(r.cyc||'')}"><datalist id="cyc-list">${CYCLES.map(x=>`<option value="${x}">`).join('')}</datalist></div>
         <div class="field"><label for="f-pic">PIC</label><select id="f-pic">${opt(PEOPLE,r.pic)}${extraOpt(PEOPLE,r.pic)}</select></div>
