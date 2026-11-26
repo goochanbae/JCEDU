@@ -628,3 +628,7 @@ input[type=date].bad{border-color:var(--bad,#e5484d)!important;background:#fff5f
 .toolbar select,.toolbar input[type=date]{padding:7px 10px}
 .toolbar input[type=search]{padding:7px 12px}
 .toolbar .chk-inline{gap:6px;padding:0 4px}
+
+/* 체크박스와 글자 높이 맞춤 */
+.toolbar label,.chk-inline{display:inline-flex;align-items:center;gap:6px;line-height:1}
+.toolbar input[type=checkbox],.chk-inline input[type=checkbox]{margin:0;width:15px;height:15px;flex:none;position:relative;top:0;accent-color:var(--ink)}
