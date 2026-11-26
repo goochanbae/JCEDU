@@ -254,6 +254,14 @@ function rowVisible(r,f){
   if(f.q){ const q=f.q.trim().toLowerCase(); if(q && ![r.cat,r.task].some(x=>x&&String(x).toLowerCase().includes(q))) return false; }   // 검색은 업무명·업무 내용에서만
   return true;
 }
+// 방금 바꾼·옮긴 업무 줄을 잠깐 표시하고, 표 밖에 있으면 보이는 곳으로
+let FLASH_ID = null;
+function flashRow(view){
+  if(!FLASH_ID) return; const tr = view.querySelector(`tr[data-id="${FLASH_ID}"]`); FLASH_ID = null; if(!tr) return;
+  const tw = view.querySelector('.tablewrap'), a = tr.getBoundingClientRect(), b = tw ? tw.getBoundingClientRect() : {top:0,bottom:innerHeight};
+  if(a.top < b.top+40 || a.bottom > b.bottom) tr.scrollIntoView({block:'center'});
+  tr.classList.add('flash'); setTimeout(()=>tr.classList.remove('flash'), 1600);
+}
 function renderTable(sheet, bodyOnly){
   const key = sheet==='WBS'?'wbs':'req', f = ui[key];
   const groups = items.filter(r=>r.sheet===sheet&&r.lvl==='L1');
@@ -298,14 +306,18 @@ function renderTable(sheet, bodyOnly){
     </div>
     <div class="tablewrap"><table><thead><tr><th>ID</th><th>#</th><th>업무</th>${colOrder.map(k=>`<th draggable="true" data-col="${k}" class="dragcol" title="끌어서 좌우로 이동">${MOVABLE[k].label}</th>`).join('')}</tr></thead><tbody>${body||`<tr><td colspan="${ncols}" class="empty">조건에 맞는 업무가 없습니다.</td></tr>`}</tbody></table></div>`;
   const view = $('v-'+key);
+  // 다시 그려도 보던 위치 그대로 (표 안 스크롤 + 화면 스크롤)
+  const tw0 = view.querySelector('.tablewrap'), keep = {top: tw0?tw0.scrollTop:0, left: tw0?tw0.scrollLeft:0, win: window.scrollY};
+  const restore = () => { const tw = view.querySelector('.tablewrap'); if(tw){ tw.scrollTop = keep.top; tw.scrollLeft = keep.left; } if(Math.abs(window.scrollY-keep.win)>1) window.scrollTo(0, keep.win); flashRow(view); };
   const on=(id,ev,fn)=>{ const el=$(id); if(el) el.addEventListener(ev,fn); };
   if(bodyOnly && $(`${key}-q`)){
     const tmp=document.createElement('div'); tmp.innerHTML=html;
     view.querySelector('.tablewrap').replaceWith(tmp.querySelector('.tablewrap'));
     view.querySelector('.toolbar .count').replaceWith(tmp.querySelector('.toolbar .count'));
-    bindBody(); return;
+    bindBody(); restore(); return;
   }
   view.innerHTML = html;
+  restore();
   // 검색창은 다시 만들지 않고 표만 갱신 (한글 입력 중 자모가 분리되지 않게)
   on(`${key}-q`,'input',e=>{ f.q=e.target.value; renderTable(sheet, true); });
   for(const k of ['pic','st','brand','chk']) on(`${key}-${k}`,'change',e=>{f[k]=e.target.value; renderTable(sheet);});
@@ -385,6 +397,7 @@ const G_ZOOM = {wide:26, mid:12, narrow:5};   // 하루당 px
 const addDays = (d,n) => new Date(d.getTime()+n*DAY);
 function renderGantt(){
   const sheet = ui.ganttSheet, px = ui.ganttPx || G_ZOOM[ui.ganttZoom] || 12, onlyMine = ui.ganttMine;
+  { const ob = $('g-box'); ui.ganttKeep = ob && ui.ganttScrolled ? {left:ob.scrollLeft, top:ob.scrollTop} : null; }
   const vis = r => !onlyMine || r.pic===me.name || r.bak===me.name;
   const dated = items.filter(r=>r.sheet===sheet&&isTask(r)&&(r.start_date||r.end_date)&&vis(r));
   const ds = dated.flatMap(r=>[pd(r.start_date),pd(r.end_date)]).filter(Boolean);
@@ -432,6 +445,7 @@ function renderGantt(){
   const box = $('g-box');
   const scrollToday = () => { box.scrollLeft = Math.max(0, X(today) - (box.clientWidth-300)/3); };
   $('g-today').onclick = scrollToday;
+  if(!ui.ganttAnchor && ui.ganttKeep){ box.scrollLeft = ui.ganttKeep.left; box.scrollTop = ui.ganttKeep.top; }
   if(ui.ganttAnchor){ const a = ui.ganttAnchor; ui.ganttAnchor = null; box.scrollLeft = Math.max(0, (a.day - (g0-a.g0)/DAY) * px - a.x); box.scrollTop = a.top; }
   else if(!ui.ganttScrolled){ scrollToday(); ui.ganttScrolled = true; }
   bindGanttDrag(box, px);
@@ -1512,6 +1526,7 @@ async function openDrawer(id, tab){
 }
 function closeDrawer(){ if(selId) markSeen(selId); drawer.classList.remove('on'); scrim.classList.remove('on'); selId=null; rerender(); }
 async function saveDrawer(r){
+  FLASH_ID = r.id;
   const patch={}, changes=[];
   for(const k of FIELDS){
     const el=$('f-'+k); if(!el||el.disabled) continue;
@@ -1605,6 +1620,7 @@ async function placeItem(r, target, mode){
   const ids = Object.keys(patch);
   for(const id of ids){ const { error } = await sb.from('items').update({...patch[id], ...stamp}).eq('id', id); if(error){ toast('옮기지 못했어요: '+error.message); await loadItems(); return false; } }
   const newNum = (patch[r.id].num) || r.num;
+  FLASH_ID = r.id;
   await sb.from('item_history').insert({item_id:r.id, changed_by:me.name, changes:`상위 항목 이동: ${old?old.num+' '+old.cat:'–'} → ${np.num} ${np.cat} (새 번호 ${newNum})`});
   await loadItems();
   toast(`${r.id}를 ${np.cat} ${mode==='into'?'맨 아래로':mode==='before'?`의 ${target.id} 앞으로`:`의 ${target.id} 다음으로`} 옮겼어요.`);
@@ -1914,6 +1930,8 @@ function rerender(){
   document.querySelectorAll('.view').forEach(s=>s.classList.toggle('on',s.id==='v-'+v));
   if(v==='admin' && me.role!=='admin'){ location.hash='my'; return; }
   const entering = lastView!==v; lastView = v;
+  const winY = window.scrollY;
+  queueMicrotask(()=>{ if(!entering && Math.abs(window.scrollY-winY)>1) window.scrollTo(0, winY); });
   if(v==='daily'){ if(entering || !$('dr-body')) renderDaily(); } else if(v==='my') renderMy(); else if(v==='admin') renderAdmin(); else if(v==='dashboard') renderDashboard(); else if(v==='wbs'||v==='req') renderTable(v==='wbs'?'WBS':'REQ', document.activeElement && document.activeElement.id===v+'-q'); else if(v==='weekly') renderWeekly(); else if(v==='cal') renderCal(); else renderGantt();
 }
 window.addEventListener('hashchange',()=>{ if(location.hash.includes('access_token')) return; rerender(); });
