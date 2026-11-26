@@ -64,6 +64,7 @@
   </div>
   <nav class="tabs" id="tabs">
     <a href="#my" data-v="my">내 업무</a>
+    <a href="#daily" data-v="daily">일일보고</a>
     <a href="#dashboard" data-v="dashboard">팀 현황</a>
     <a href="#wbs" data-v="wbs">WBS<span class="n" id="nW"></span></a>
     <a href="#req" data-v="req">대표님 REQ<span class="n" id="nR"></span></a>
@@ -75,6 +76,7 @@
 </header>
 <main>
   <section class="view" id="v-my"></section>
+  <section class="view" id="v-daily"></section>
   <section class="view" id="v-dashboard"></section>
   <section class="view" id="v-wbs"></section>
   <section class="view" id="v-req"></section>
@@ -91,6 +93,7 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
 <script src="config.js"></script>
+<script src="daily_xlsx.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

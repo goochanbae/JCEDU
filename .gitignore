@@ -1,3 +1,4 @@
 seed.sql
 *.xlsx
 .DS_Store
+!templates/*.xlsx

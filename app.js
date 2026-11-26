@@ -7,13 +7,13 @@ const CFG = window.JC_CONFIG || {};
 if(!window.supabase){ document.body.innerHTML = '<p style="padding:24px;font-family:Pretendard,sans-serif">필요한 모듈(Supabase)을 불러오지 못했습니다. 인터넷 연결을 확인하고 새로고침하세요.</p>'; return; }
 const sb = window.supabase.createClient(CFG.SUPABASE_URL, CFG.SUPABASE_ANON_KEY);
 
-const STATUS = ['In Progress','Planned','On Hold','Completed','Canceled'];
-const ST_KO = {'In Progress':'진행 중','Planned':'예정','On Hold':'보류','Completed':'완료','Canceled':'취소'};
-const ST_CLS = {'In Progress':'ip','Planned':'pl','On Hold':'oh','Completed':'co','Canceled':'ca'};
+const STATUS = ['In Progress','Planned','Review','On Hold','Completed','Canceled'];
+const ST_KO = {'In Progress':'진행 중','Planned':'예정','Review':'컨펌 대기','On Hold':'보류','Completed':'완료','Canceled':'취소'};
+const ST_CLS = {'In Progress':'ip','Planned':'pl','Review':'rv','On Hold':'oh','Completed':'co','Canceled':'ca'};
 const BRANDS = ['공통','메디원','유프관','메디원&유프관','아임이그잼','인노트','제이콘','기타'];
 const CYCLES = ['일간','주간','월간','분기','반기','연간','행사별','수시','단발'];
-const FIELDS = ['cat','task','output','link','brand','cyc','pic','bak','st','prog','start_date','end_date','note','memo','kpi_target','kpi_actual','kpi_month','kpi_memo','req_date','due_date','req_text','done_date','feedback'];
-const LABELS = {cat:'Category',task:'Task',output:'Output',link:'산출물 링크',brand:'브랜드',cyc:'주기',pic:'PIC',bak:'Backup',st:'진행 상태',prog:'progress',start_date:'Start',end_date:'End',note:'비고',memo:'최근 메모',kpi_target:'월 목표',kpi_actual:'월 실적',kpi_month:'기준월',kpi_memo:'실적 메모',req_date:'요청일',due_date:'보고 기한',req_text:'요청 원문',done_date:'보고 완료일',feedback:'대표님 피드백'};
+const FIELDS = ['kind','cat','task','output','link','brand','cyc','pic','bak','st','prog','start_date','end_date','note','memo','kpi_target','kpi_actual','kpi_month','kpi_memo','req_date','due_date','req_text','done_date','feedback'];
+const LABELS = {cat:'Category',task:'Task',output:'Output',link:'산출물 링크',brand:'브랜드',cyc:'주기',pic:'PIC',bak:'Backup',st:'진행 상태',prog:'progress',start_date:'Start',end_date:'End',note:'비고',memo:'최근 메모',kind:'유형',kpi_target:'월 목표',kpi_actual:'월 실적',kpi_month:'기준월',kpi_memo:'실적 메모',req_date:'요청일',due_date:'보고 기한',req_text:'요청 원문',done_date:'보고 완료일',feedback:'대표님 피드백'};
 const DAY = 864e5;
 const today = (() => { const d = new Date(); d.setHours(0,0,0,0); return d; })();
 
@@ -23,7 +23,8 @@ const ui = {
   req:{q:'',pic:'',st:'',brand:'',chk:'',mine:false,collapsed:new Set()},
   my:{view:(()=>{ try{ return localStorage.getItem('jcwbs-myview')==='board'?'board':'list'; }catch(e){ return 'list'; } })(), filter:'', done:false},
   weeklyBase:null, ganttSheet:'WBS', ganttZoom:'mid', ganttMine:false, ganttScrolled:false,
-  cal:{y:null, m:null, sheet:'', who:'', brand:'', scope:'event'}
+  cal:{y:null, m:null, sheet:'', who:'', brand:'', scope:'event'},
+  daily:{mode:'write', date:null}
 };
 const $ = id => document.getElementById(id);
 
@@ -44,7 +45,8 @@ function desc(id){ const out=[]; for(const k of kids(id)){ out.push(k); out.push
 function index(){ items.sort((a,b)=>a.sort_order-b.sort_order); byId = Object.fromEntries(items.map(r=>[r.id,r])); }
 function dday(r){ if(!isTask(r)) return null; const e=pd(r.end_date); if(!e||r.st==='Completed'||r.st==='Canceled') return null; return Math.round((e-today)/DAY); }
 function check(r){
-  if(!isTask(r)) return '';
+  if(!isTask(r) || r.kind==='goal') return '';   // 목표·R&R은 일정 체크 대상 아님
+  if(r.st==='Review') return '진행';
   if(r.st==='Completed') return (r.prog==null||r.prog<1) ? '⚠ 진척률 확인' : '완료';
   if(r.st==='Canceled') return '취소';
   const e=pd(r.end_date), s=pd(r.start_date);
@@ -183,6 +185,7 @@ function subscribe(){
     if(selId && p.new && p.new.id===selId && p.new.updated_by!==me.name) toast(`${p.new.updated_by||'다른 팀원'}님이 이 업무를 방금 수정했습니다.`);
     if(!$('drawer').classList.contains('on')) rerender();
   }).on('postgres_changes', {event:'INSERT', schema:'public', table:'item_comments'}, p => onCommentInsert(p.new))
+  .on('postgres_changes', {event:'*', schema:'public', table:'daily_reports'}, () => { if(current()==='daily' && ui.daily.mode==='team' && !$('drawer').classList.contains('on')) renderTeamDaily(); })
   .on('postgres_changes', {event:'INSERT', schema:'public', table:'item_history'}, p => { addFeed(fromHistory(p.new), true); if(!$('drawer').classList.contains('on')) rerender(); else newsTabs(); })
   .subscribe(st => { const el=$('syncState'); el.textContent = st==='SUBSCRIBED'?'실시간 반영 중':'연결 중'; el.classList.toggle('live', st==='SUBSCRIBED'); });
 }
@@ -265,7 +268,7 @@ function renderTable(sheet, bodyOnly){
       const a2 = r.lvl==='P' ? groupAgg(r) : null;
       body += `<tr class="task lvl-${r.lvl}${r.id===selId?' sel':''}" data-id="${r.id}">
         <td class="mono">${r.id}</td><td class="mono" style="color:var(--muted)">${esc(r.num)}</td>
-        <td class="t-name"><span class="cat">${esc(r.cat||'')}${delChip(r)}${newsChip(r)}${cmtBtn(r,true)}</span><span class="tk">${esc(r.task||'')}</span></td>
+        <td class="t-name"><span class="cat">${r.kind?`<span class="kt kt-${r.kind}">${r.kind==='goal'?'목표':r.kind}</span>`:''}${esc(r.cat||'')}${delChip(r)}${newsChip(r)}${cmtBtn(r,true)}</span><span class="tk">${esc(r.task||'')}</span></td>
         ${colOrder.map(k=>`<td class="${MOVABLE[k].cls||''}">${MOVABLE[k].cell(r,a2)}</td>`).join('')}</tr>`;
     }
   }
@@ -554,7 +557,7 @@ function openDay(ds){
 const STALE_DAYS = 7;
 const PROG_STEPS = [0, .25, .5, .75, 1];
 const DONE = s => s==='Completed' || s==='Canceled';
-const stale = r => isTask(r) && r.st==='In Progress' && r.updated_at && (Date.now()-new Date(r.updated_at).getTime())/DAY >= STALE_DAYS;
+const stale = r => isTask(r) && r.kind!=='goal' && r.st==='In Progress' && r.updated_at && (Date.now()-new Date(r.updated_at).getTime())/DAY >= STALE_DAYS;
 const ckStat = id => { const a = CHECKS[id]||[]; return {n:a.length, done:a.filter(c=>c.done).length}; };
 const titleOf = r => r.task && r.cat ? `${r.cat} · ${r.task}` : (r.cat || r.task || '(제목 없음)');
 const ago = t => { const d = Math.floor((Date.now()-new Date(t).getTime())/DAY); return d<=0?'오늘':d===1?'어제':d+'일 전'; };
@@ -617,7 +620,7 @@ function bCard(r){
 function renderMy(){
   const el = $('v-my'), f = ui.my;
   const [w0,w1] = weekRange();
-  const mineAll = items.filter(r=>isTask(r) && r.pic===me.name);
+  const mineAll = items.filter(r=>isTask(r) && r.kind!=='goal' && r.pic===me.name);
   const open = mineAll.filter(r=>!DONE(r.st));
   const inWeek = r => { const e=pd(r.end_date); return e && e>=w0 && e<=w1; };
   const late = open.filter(r=>check(r)==='지연'), week = open.filter(inWeek), ip = open.filter(r=>r.st==='In Progress'), st = open.filter(stale);
@@ -626,11 +629,11 @@ function renderMy(){
   let list = f.filter && FILTERS[f.filter] ? FILTERS[f.filter][1] : (f.done ? mineAll : open);
   list = [...list].sort((a,b)=>{ const x=focusRank(a), y=focusRank(b); return x[0]-y[0] || x[1]-y[1]; });
   const tile = (k,label,arr,cls,sub) => `<button class="tile ${cls||''} ${f.filter===k?'on':''}" type="button" data-myf="${k}"><span class="k">${label}</span><span class="v">${arr.length}</span><span class="s">${sub}</span></button>`;
-  const bak = items.filter(r=>isTask(r) && r.bak===me.name && !DONE(r.st));
-  const all = items.filter(r=>isTask(r) && r.pic==='전원' && !DONE(r.st));
+  const bak = items.filter(r=>isTask(r) && r.kind!=='goal' && r.bak===me.name && !DONE(r.st));
+  const all = items.filter(r=>isTask(r) && r.kind!=='goal' && r.pic==='전원' && !DONE(r.st));
   const inbox = items.filter(r=>r.parent && /-INBOX$/.test(r.parent));
   const ed = canEdit();
-  const board = () => `<div class="board">${['Planned','In Progress','On Hold','Completed'].map(s=>{
+  const board = () => `<div class="board">${['Planned','In Progress','Review','On Hold','Completed'].map(s=>{
       let cs = mineAll.filter(r=>r.st===s);
       if(s==='Completed') cs = cs.sort((a,b)=>new Date(b.updated_at)-new Date(a.updated_at)).slice(0,12);
       else cs = cs.sort((a,b)=>{ const x=focusRank(a), y=focusRank(b); return x[0]-y[0] || x[1]-y[1]; });
@@ -641,6 +644,7 @@ function renderMy(){
       <h2>${esc(me.name)} 님, 오늘 챙길 업무 ${todayN}건</h2>
       <span class="hist" style="display:inline">${fmtD(w0)} ~ ${fmtD(w1)} 주 · 진행 중 ${ip.length}건</span>
       <div class="spacer"></div>
+      ${canEdit()?'<a class="btn" href="#daily" id="my-daily">오늘 일일보고 <span class="dr-st" id="my-daily-st">확인 중</span></a>':''}
       <button class="btn" type="button" id="my-report">내 주간보고 복사</button>
       ${ed?'<button class="btn mint" type="button" id="my-add">+ 업무 등록</button>':''}
     </div>
@@ -671,6 +675,7 @@ function renderMy(){
       </div>
     </div>`;
   loadNews(mineAll.concat(bak).map(r=>r.id));
+  if(canEdit()) sb.from('daily_reports').select('submitted_at').eq('author',me.name).eq('report_date',iso(today)).maybeSingle().then(({data})=>{ const e=$('my-daily-st'); if(e){ e.textContent = data ? (data.submitted_at?'제출됨':'임시 저장') : '작성 전'; e.className = 'dr-st '+(data&&data.submitted_at?'ok':'todo'); } });
 }
 async function loadNews(ids){
   const box = () => $('my-news');
@@ -682,7 +687,7 @@ async function loadNews(ids){
 }
 function myReport(){
   const [w0,w1] = weekRange(); const p0=new Date(w0); p0.setDate(w0.getDate()-7);
-  const mine = items.filter(r=>isTask(r) && r.pic===me.name);
+  const mine = items.filter(r=>isTask(r) && r.kind!=='goal' && r.pic===me.name);
   const doneLast = mine.filter(r=>r.st==='Completed' && new Date(r.updated_at)>=p0);
   const ipL = mine.filter(r=>r.st==='In Progress');
   const dueW = mine.filter(r=>!DONE(r.st) && (()=>{const e=pd(r.end_date); return e&&e>=w0&&e<=w1;})());
@@ -751,6 +756,7 @@ function openQuickAdd(){
         <div class="field full"><label for="qa-name">업무명 *</label><input id="qa-name" required maxlength="120" placeholder="11월 블로그 원고 4건 발행"></div>
         <div class="field"><label for="qa-start">시작일</label><input id="qa-start" type="date" value="${iso(today)}"></div>
         <div class="field"><label for="qa-end">마감일</label><input id="qa-end" type="date"></div>
+        <div class="field"><label for="qa-kind">유형</label><select id="qa-kind"><option value="P">P 프로젝트</option><option value="R">R 반복(루틴)</option></select></div>
         <div class="field"><label for="qa-sheet">구분</label><select id="qa-sheet"><option value="WBS">WBS</option><option value="REQ">대표님 REQ</option></select></div>
         <div class="field"><label for="qa-brand">브랜드</label><select id="qa-brand">${BRANDS.map(b=>`<option ${b==='공통'?'selected':''}>${esc(b)}</option>`).join('')}</select></div>
         <div class="field full"><label for="qa-parent">위치 (WBS 상위 항목)</label><select id="qa-parent">${placeOptions('WBS')}</select></div>
@@ -773,7 +779,7 @@ function openQuickAdd(){
     if(s && en && en<s){ $('qa-msg').textContent='마감일이 시작일보다 빨라요.'; return; }
     const lines = $('qa-checks').value.split('\n').map(x=>x.trim()).filter(Boolean).slice(0,50);
     $('qa-save').disabled = true;
-    const id = await insertUnder(parent, {cat:name, brand:$('qa-brand').value, pic:$('qa-pic').value||me.name, bak:$('qa-bak').value||null, start_date:s, end_date:en, prog:lines.length?0:null}, '업무 등록');
+    const id = await insertUnder(parent, {cat:name, kind:$('qa-kind').value, cyc:$('qa-kind').value==='R'?'반복':'단발', brand:$('qa-brand').value, pic:$('qa-pic').value||me.name, bak:$('qa-bak').value||null, start_date:s, end_date:en, prog:lines.length?0:null}, '업무 등록');
     if(!id){ $('qa-save').disabled=false; return; }
     if(lines.length){
       const { error } = await sb.from('item_checks').insert(lines.map((t,i)=>({item_id:id, text:t, sort_order:i+1})));
@@ -792,7 +798,7 @@ async function insertUnder(parentId, fields, label){
   const lastNum = sib.length ? Math.max(...sib.map(s=>parseInt(String(s.num).split('.').pop(),10)||0)) : 0;
   const tail = [p, ...desc(parentId)].reduce((a,b)=>b.sort_order>a.sort_order?b:a);
   const next = items.find(x=>x.sort_order>tail.sort_order);
-  const row = {id, sheet, num:`${p.num}.${lastNum+1}`, lvl:p.lvl==='L1'?'T':'C', parent:parentId, cyc:'단발', st:'Planned', w:0,
+  const row = {id, sheet, num:`${p.num}.${lastNum+1}`, lvl:p.lvl==='L1'?'T':'C', parent:parentId, cyc:'단발', kind:'P', st:'Planned', w:0,
     sort_order: next ? (tail.sort_order+next.sort_order)/2 : tail.sort_order+1, updated_by:me.name, updated_at:new Date().toISOString(), ...fields};
   if(!row.pic) row.pic = me.name; if(!row.brand) row.brand = p.brand||'공통';
   const { data, error } = await sb.from('items').insert(row).select();
@@ -858,11 +864,12 @@ let FEED = [], READ = {before:0, keys:{}}, feedFilter = {cat:'all', mineOnly:fal
 const nKey = k => `jcwbs-${k}-${(me&&me.email||'').toLowerCase()}`;
 const CATS = [
   ['all','전체'], ['mention','멘션'], ['comment','댓글'], ['new','새 업무'], ['prog','상태·진척'],
-  ['sched','일정'], ['edit','내용 수정'], ['move','이동'], ['del','삭제'], ['admin','회원·담당자']
+  ['sched','일정'], ['edit','내용 수정'], ['move','이동'], ['del','삭제'], ['daily','일일보고'], ['admin','회원·담당자']
 ];
 const CAT_KO = Object.fromEntries(CATS);
 function catsOfHistory(h){
   if(h.item_id==='MEMBER' || h.item_id==='STAFF') return ['admin'];
+  if(h.item_id==='DAILY') return (me && String(h.changes).includes('@'+me.name)) ? ['mention','daily'] : ['daily'];
   const t = h.changes||'', out = new Set();
   if(/^(업무 등록|업무 추가|카테고리 추가)/.test(t)) out.add('new');
   if(/진행 상태|progress|체크리스트/.test(t)) out.add('prog');
@@ -970,14 +977,14 @@ function renderFeedList(){
   for(const e of list){
     const g = day(e.at); if(g!==last){ html += `<div class="nt-day">${g}</div>`; last=g; }
     const r = byId[e.item], rd = isRead(e);
-    const title = r ? titleOf(r) : (e.cats.includes('admin') ? (e.item==='MEMBER'?'회원 관리':'담당자 관리') : `${e.item} (삭제된 업무)`);
+    const title = r ? titleOf(r) : e.item==='DAILY' ? '일일보고' : (e.cats.includes('admin') ? (e.item==='MEMBER'?'회원 관리':'담당자 관리') : `${e.item} (삭제된 업무)`);
     html += `<button type="button" class="nt-item ${rd?'':'unread'}" data-k="${esc(e.key)}" data-item="${esc(e.item)}" data-src="${e.src}" ${r?'':'data-noopen="1"'}>
       <div class="nt-top">${rd?'':'<i class="dot"></i>'}${e.cats.map(c=>`<em class="nk ${c}">${CAT_KO[c]}</em>`).join('')}<span class="nt-t">${esc(title)}</span>${r&&myItem(e.item)?'<span class="nt-mine">내 업무</span>':''}</div>
       <div class="nt-txt">${e.src==='c'?richText(String(e.text).slice(0,200)):esc(String(e.text).slice(0,200))}</div>
       <div class="nt-meta">${esc(e.by)}${e.by===me.name?' (나)':''} · ${new Date(e.at).toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'})}</div></button>`;
   }
   box.innerHTML = html || `<div class="cmt-empty">${feedFilter.cat==='all'?'최근 30일 동안 변경 사항이 없어요.':`'${CAT_KO[feedFilter.cat]}' 알림이 없어요.`}</div>`;
-  box.querySelectorAll('[data-k]').forEach(b=>b.onclick=()=>{ markRead(b.dataset.k); if(b.dataset.noopen){ renderFeedList(); return; } openDrawer(b.dataset.item, b.dataset.src==='c'?'cmt':(b.dataset.src==='h'?'hist':'info')); });
+  box.querySelectorAll('[data-k]').forEach(b=>b.onclick=()=>{ markRead(b.dataset.k); if(b.dataset.item==='DAILY'){ closeDrawer(); ui.daily.mode='team'; location.hash='daily'; lastView=null; rerender(); return; } if(b.dataset.noopen){ renderFeedList(); return; } openDrawer(b.dataset.item, b.dataset.src==='c'?'cmt':(b.dataset.src==='h'?'hist':'info')); });
 }
 $('bellBtn').addEventListener('click', openNotifs);
 
@@ -1112,6 +1119,264 @@ function onCommentInsert(c){
   if(!$('drawer').classList.contains('on')) rerender(); else newsTabs();
 }
 
+// ---------------- 일일보고 — 전일 결과는 어제 금일 업무에서 자동, 금일은 내 업무에서 선택, 이번 주 계획은 업무 목록에서 자동
+// 제출하면 업무 진척률·상태에 반영하고, 팀 양식 그대로 문구 복사 · 엑셀(팀 양식) 내려받기
+const KIND_KO = {goal:'목표', P:'P', R:'R'};
+const DR_ST = {'Planned':'예정','In Progress':'진행중','Review':'진행중','On Hold':'보류','Completed':'완료','Canceled':'완료'};
+const isWork = r => isTask(r) && r.kind!=='goal';
+const yymmdd = iso => iso ? String(iso).slice(2,10).replace(/-/g,'.') : '';
+const p100 = v => v==null||v==='' ? '' : Math.round(Number(v)*100)+'%';
+let DR = {date:null, report:null, done:[], today:[], issues:[], dirty:false};
+let DR_TPL = null;
+function weekOf(iso){ const d=pd(iso), w0=new Date(d); w0.setDate(d.getDate()-((d.getDay()+6)%7)); const w1=new Date(w0); w1.setDate(w0.getDate()+6); return [w0,w1]; }
+// 이번 주 계획: 내 업무 중 (보고일이 속한 주에 마감) 또는 (아직 안 끝난 업무). 완료일 순
+function planFor(author, dateIso){
+  const [w0,w1] = weekOf(dateIso);
+  return items.filter(r=>isWork(r) && r.pic===author && r.st!=='Canceled' && (()=>{ const e=pd(r.end_date); if(r.st==='Completed') return e && e>=w0 && e<=w1; return true; })())
+    .sort((a,b)=>(pd(a.end_date)||new Date(9e15))-(pd(b.end_date)||new Date(9e15)))
+    .map(r=>({item_id:r.id, kind:r.kind==='R'?'R':'P', title:r.cat||'', detail:r.task||'', due:r.end_date||null, status:DR_ST[r.st]||'예정', st:r.st}));
+}
+const myWorkOpen = name => items.filter(r=>isWork(r) && r.pic===name && r.st!=='Completed' && r.st!=='Canceled')
+  .sort((a,b)=>(pd(a.end_date)||new Date(9e15))-(pd(b.end_date)||new Date(9e15)));
+const entryFromItem = (r, prog) => ({item_id:r.id, kind:r.kind==='R'?'R':'P', title:r.cat||'', detail:'', prog: prog??(r.prog??0), note:''});
+
+async function loadMyDaily(dateIso){
+  DR = {date:dateIso, report:null, done:[], today:[], issues:[], dirty:false};
+  const { data:rep } = await sb.from('daily_reports').select('*').eq('author',me.name).eq('report_date',dateIso).maybeSingle();
+  if(rep){
+    DR.report = rep; DR.issues = (rep.issues||[]).map(x=>({issue:x.issue||'', action:x.action||''}));
+    const { data:es } = await sb.from('daily_entries').select('*').eq('report_id',rep.id).order('sort_order');
+    for(const e of es||[]) if(e.section!=='plan') DR[e.section].push({item_id:e.item_id, kind:e.kind||'P', title:e.title, detail:e.detail||'', prog:e.prog, note:e.note||''});
+  } else {
+    // 전일 결과 = 가장 최근 내 보고의 '금일 업무' (진척률은 지금 업무 진척률로)
+    const { data:prev } = await sb.from('daily_reports').select('id,report_date').eq('author',me.name).lt('report_date',dateIso).order('report_date',{ascending:false}).limit(1).maybeSingle();
+    if(prev){
+      const { data:es } = await sb.from('daily_entries').select('*').eq('report_id',prev.id).eq('section','today').order('sort_order');
+      DR.done = (es||[]).map(e=>{ const r = e.item_id && byId[e.item_id]; return {item_id:e.item_id, kind:e.kind||'P', title:e.title, detail:e.detail||'', prog: r && r.prog!=null ? r.prog : e.prog, note: r && r.st==='Review' ? '컨펌 대기' : ''}; });
+      DR.prevDate = prev.report_date;
+    }
+  }
+  if(!DR.issues.length) DR.issues = [{issue:'', action:''}];
+}
+const PROG_OPTS = [0,.1,.2,.3,.4,.5,.6,.7,.8,.9,.95,1];
+const progSel = (v, attr) => `<select ${attr} aria-label="진행률">${PROG_OPTS.map(p=>`<option value="${p}" ${v!=null && Math.abs(Number(v)-p)<.001?'selected':''}>${Math.round(p*100)}%</option>`).join('')}${v!=null && !PROG_OPTS.some(p=>Math.abs(Number(v)-p)<.001)?`<option value="${v}" selected>${Math.round(v*100)}%</option>`:''}</select>`;
+const kindTag = k => `<span class="kt kt-${k||'P'}">${KIND_KO[k]||k||'P'}</span>`;
+
+function renderDaily(){
+  const el = $('v-daily'); const f = ui.daily;
+  if(!f.date) f.date = iso(today);
+  const tabs = `<div class="vt" role="group" aria-label="보기"><button type="button" data-dm="write" class="${f.mode==='write'?'on':''}">내 보고 작성</button><button type="button" data-dm="team" class="${f.mode==='team'?'on':''}">팀 일일보고</button></div>`;
+  el.innerHTML = `<div class="band"><div class="my-head"><h2>일일보고</h2>${tabs}<input type="date" id="dr-date" value="${f.date}" aria-label="보고일"><button class="btn" type="button" id="dr-todaybtn">오늘</button><div class="spacer"></div><span class="hist" style="display:inline" id="dr-state"></span></div></div><div id="dr-body"><div class="empty">불러오는 중…</div></div>`;
+  // 작성 중에 화면을 바꾸면 임시 저장부터
+  const leave = async () => { if(f.mode==='write' && DR.dirty && DR.date) await saveDaily(false, true); };
+  el.querySelectorAll('[data-dm]').forEach(b=>b.onclick=async()=>{ await leave(); f.mode=b.dataset.dm; renderDaily(); });
+  $('dr-date').onchange = async e => { await leave(); f.date = e.target.value || iso(today); renderDaily(); };
+  $('dr-todaybtn').onclick = async () => { await leave(); f.date = iso(today); renderDaily(); };
+  if(f.mode==='team') renderTeamDaily(); else if(me.role==='viewer'){ f.mode='team'; renderTeamDaily(); } else loadMyDaily(f.date).then(renderWrite);
+}
+
+function renderWrite(){
+  const box = $('dr-body'); if(!box || current()!=='daily' || ui.daily.mode!=='write') return;
+  const f = ui.daily, sub = DR.report && DR.report.submitted_at;
+  $('dr-state').textContent = sub ? `제출됨 · ${new Date(DR.report.submitted_at).toLocaleString('ko-KR',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'})} (다시 제출하면 덮어써요)` : DR.report ? '임시 저장됨' : '작성 전';
+  const open = myWorkOpen(me.name);
+  const chosen = new Set(DR.today.map(e=>e.item_id).filter(Boolean));
+  const plan = planFor(me.name, f.date);
+  const rd = pd(f.date);
+  const row = (e,i,sec) => `<div class="dr-row" data-sec="${sec}" data-i="${i}">
+      ${e.item_id&&byId[e.item_id] ? kindTag(e.kind) : `<select data-f="kind" class="dr-kind" aria-label="구분"><option ${e.kind!=='R'?'selected':''}>P</option><option ${e.kind==='R'?'selected':''}>R</option></select>`}<div class="dr-t">${e.item_id&&byId[e.item_id] ? `<b>${esc(e.title)}</b>` : `<input class="dr-title" data-f="title" value="${esc(e.title||'')}" placeholder="업무명 (업무 등록 없이 직접 입력)" aria-label="업무명">`}
+        <input class="dr-detail" data-f="detail" value="${esc(e.detail||'')}" placeholder="세부 내용 (예: 칼럼 2부 연결 소재 업로드)" aria-label="세부 내용"></div>
+      ${progSel(e.prog, 'data-f="prog"')}
+      ${sec==='done'?`<select data-f="note" aria-label="완료 후 상태"><option value="" ${!e.note?'selected':''}>-</option><option ${e.note==='컨펌 대기'?'selected':''}>컨펌 대기</option></select>`:''}
+      <button type="button" class="iconbtn sm" data-del aria-label="${esc(e.title)} 빼기">×</button></div>`;
+  box.innerHTML = `
+  <div class="dr-grid">
+   <div class="dr-main">
+    <section class="panel"><h2 class="sec">01 전일 업무 결과 <span class="hist" style="display:inline">${DR.prevDate?`${yymmdd(DR.prevDate)} 보고의 금일 업무에서 가져옴 · `:''}실제 진행률만 고치세요</span></h2>
+      <div class="dr-list">${DR.done.map((e,i)=>row(e,i,'done')).join('') || '<div class="hist">전일 보고가 없어요. 아래에서 업무를 추가하세요.</div>'}</div>
+      <div class="dr-add"><select id="dr-add-done" aria-label="업무에서 추가"><option value="">+ 내 업무에서 추가</option>${myWorkOpen(me.name).concat(items.filter(r=>isWork(r)&&r.pic===me.name&&r.st==='Completed'&&pd(r.updated_at)>=addDays(rd,-7))).map(r=>`<option value="${r.id}">${esc(titleOf(r))}</option>`).join('')}</select><button class="linkbtn" type="button" data-free="done">+ 직접 입력</button></div>
+    </section>
+    <section class="panel"><h2 class="sec">02 금일 업무 내용 <span class="hist" style="display:inline">내 업무를 체크하고 목표 진행률을 고르세요</span></h2>
+      <div class="dr-pick">${open.map(r=>{ const c=check(r); return `<label class="dr-pk ${chosen.has(r.id)?'on':''}"><input type="checkbox" data-pick="${r.id}" ${chosen.has(r.id)?'checked':''}>${kindTag(r.kind)}<span>${esc(titleOf(r))}</span><span class="hist" style="display:inline">${r.end_date?yymmdd(r.end_date):'완료일 없음'} · ${p100(r.prog)||'0%'}${c==='지연'?' · <b style="color:var(--bad)">지연</b>':''}</span></label>`; }).join('') || '<div class="hist">진행 중인 내 업무가 없어요. 새 업무를 추가하세요.</div>'}</div>
+      <div class="dr-list">${DR.today.map((e,i)=>row(e,i,'today')).join('')}</div>
+      <form class="dr-new" id="dr-new"><select id="dr-new-kind" aria-label="구분"><option value="P">P 프로젝트</option><option value="R">R 반복</option></select><input id="dr-new-title" placeholder="새 업무명 (예: 메디원 채용공고 제작)" aria-label="새 업무명" maxlength="120"><input type="date" id="dr-new-end" aria-label="예상 완료일"><button class="btn" type="submit">+ 새 업무로 추가</button></form>
+      <div class="dr-add"><button class="linkbtn" type="button" data-free="today">+ 업무 등록 없이 직접 입력</button></div>
+    </section>
+    <section class="panel"><h2 class="sec">03 이슈 / 요청사항 <span class="hist" style="display:inline">@이름을 쓰면 그 사람에게 알림</span></h2>
+      <div class="dr-issues">${DR.issues.map((x,i)=>`<div class="dr-iss" data-ii="${i}"><input data-if="issue" value="${esc(x.issue)}" placeholder="이슈 내용 (예: 튜나편입 방문 취소 논의 필요 @이빛나)" aria-label="이슈 내용"><input data-if="action" value="${esc(x.action)}" placeholder="대응 방안 / 요청사항" aria-label="대응 방안"><button type="button" class="iconbtn sm" data-idel aria-label="이슈 빼기">×</button></div>`).join('')}</div>
+      <button class="linkbtn" type="button" id="dr-iss-add">+ 이슈 추가</button>
+    </section>
+    <section class="panel"><h2 class="sec">04 이번 주 계획 <span class="hist" style="display:inline">내 업무 목록에서 자동 · 날짜·완료는 여기서 바로 고칠 수 있어요</span></h2>
+      <div class="dr-plan">${plan.map(p=>{ const r=byId[p.item_id], late = p.due && pd(p.due)<rd && p.st!=='Completed'; return `<div class="dr-pr ${late?'late':''} ${p.st==='Completed'?'done':''}">${kindTag(p.kind)}<span class="dr-pt">${esc(p.title)}${p.detail?` <span class="hist" style="display:inline">· ${esc(p.detail)}</span>`:''}</span>
+        <input type="date" data-pdue="${p.item_id}" value="${p.due||''}" aria-label="예상 완료일" ${owns(r)?'':'disabled'}><span class="chip ${late?'k-bad':''}">${late?'지남 · ':''}${esc(p.status)}</span>${p.st!=='Completed'&&owns(r)?`<button class="linkbtn" type="button" data-pdone="${p.item_id}">완료</button>`:''}</div>`; }).join('') || '<div class="hist">이번 주 계획에 들어갈 업무가 없어요.</div>'}</div>
+    </section>
+   </div>
+   <aside class="dr-side panel">
+     <h2 class="sec">보내기</h2>
+     <button class="btn" type="button" id="dr-save">임시 저장</button>
+     <button class="btn primary" type="button" id="dr-submit">제출하고 문구 복사</button>
+     <button class="btn" type="button" id="dr-xlsx">엑셀 내려받기 (팀 양식)</button>
+     <button class="btn" type="button" id="dr-copy">문구만 복사</button>
+     <p class="hist" style="margin:4px 0 0">제출하면 전일 결과의 진행률이 각 업무에 반영돼요. 100%는 완료(컨펌 대기를 고르면 '컨펌 대기')로 바뀌어요.</p>
+     <h2 class="sec" style="margin-top:12px">미리보기</h2>
+     <pre class="dr-pre" id="dr-pre"></pre>
+   </aside>
+  </div>`;
+  $('dr-pre').textContent = drText(me.name, f.date, DR.done, DR.today, DR.issues, plan);
+  bindWrite();
+}
+function drText(author, dateIso, done, todayL, issues, plan){
+  const line = (e, label) => `(${e.kind||'P'}) ${e.title}${e.detail?` : ${e.detail}`:''} (${label})`;
+  const iss = issues.filter(x=>x.issue||x.action);
+  return [`[일일보고] ${author} / ${yymmdd(dateIso)}`, '',
+    '전일 업무 결과', ...(done.length?done.map(e=>line(e, Number(e.prog)>=1 ? `완료 100%${e.note?` - ${e.note}중`:''}` : `진행률 ${p100(e.prog)||'0%'}`)):['- 없음']), '',
+    '금일 업무 내용', ...(todayL.length?todayL.map(e=>line(e, `목표 진행률 ${p100(e.prog)||'0%'}`)):['- 없음']), '',
+    '이슈', ...(iss.length?iss.map(x=>`이슈내용 : ${x.issue}${x.action?` → ${x.action}`:''}`):['이슈내용 : 없음']), '',
+    '이번 주 계획', ...(plan.length?plan.map(p=>line(p, `예상 완료일 : ${p.due?yymmdd(p.due):'미정'}`)):['- 없음'])].join('\n');
+}
+function bindWrite(){
+  const old = $('dr-body'), box = old.cloneNode(true); old.replaceWith(box);   // 다시 그릴 때 이벤트가 겹치지 않게
+  const f = ui.daily;
+  const touch = () => { DR.dirty = true; $('dr-state').textContent = '저장 안 됨 · 임시 저장하거나 제출하세요'; $('dr-pre').textContent = drText(me.name, f.date, DR.done, DR.today, DR.issues, planFor(me.name, f.date)); };
+  box.addEventListener('input', e => {
+    const rw = e.target.closest('[data-sec]');
+    if(rw && e.target.dataset.f){ const L = DR[rw.dataset.sec][+rw.dataset.i]; const k=e.target.dataset.f; L[k] = k==='prog' ? Number(e.target.value) : e.target.value; touch(); return; }
+    const ir = e.target.closest('[data-ii]'); if(ir && e.target.dataset.if){ DR.issues[+ir.dataset.ii][e.target.dataset.if] = e.target.value; touch(); }
+  });
+  box.addEventListener('change', async e => {
+    if(e.target.matches('select[data-f]')){ const rw=e.target.closest('[data-sec]'); const L=DR[rw.dataset.sec][+rw.dataset.i]; L[e.target.dataset.f] = e.target.dataset.f==='prog'?Number(e.target.value):e.target.value; touch(); return; }
+    if(e.target.dataset.pick){ const r=byId[e.target.dataset.pick]; if(e.target.checked){ if(!DR.today.some(x=>x.item_id===r.id)) DR.today.push(entryFromItem(r, Math.min(1, Math.round(((r.prog||0)+.2)*10)/10))); } else DR.today = DR.today.filter(x=>x.item_id!==r.id); DR.dirty=true; renderWrite(); return; }
+    if(e.target.id==='dr-add-done' && e.target.value){ const r=byId[e.target.value]; if(!DR.done.some(x=>x.item_id===r.id)) DR.done.push(entryFromItem(r)); DR.dirty=true; renderWrite(); return; }
+    if(e.target.dataset.pdue){ const r=byId[e.target.dataset.pdue]; if(r && await quickUpdate(r,{end_date:e.target.value||null})) toast('예상 완료일을 바꿨어요.'); renderWrite(); }
+  });
+  box.addEventListener('click', async e => {
+    const d = e.target.closest('[data-del]'); if(d){ const rw=d.closest('[data-sec]'); DR[rw.dataset.sec].splice(+rw.dataset.i,1); DR.dirty=true; renderWrite(); return; }
+    const di = e.target.closest('[data-idel]'); if(di){ DR.issues.splice(+di.closest('[data-ii]').dataset.ii,1); if(!DR.issues.length) DR.issues=[{issue:'',action:''}]; DR.dirty=true; renderWrite(); return; }
+    const fr = e.target.closest('[data-free]'); if(fr){ DR[fr.dataset.free].push({item_id:null, kind:'P', title:'', detail:'', prog:fr.dataset.free==='done'?1:.5, note:''}); DR.dirty=true; renderWrite(); const rows=$('dr-body').querySelectorAll(`[data-sec="${fr.dataset.free}"] .dr-title`); if(rows.length) rows[rows.length-1].focus(); return; }
+    const pdn = e.target.closest('[data-pdone]'); if(pdn){ const r=byId[pdn.dataset.pdone]; if(r && await quickUpdate(r,{st:'Completed'})) toast('완료로 바꿨어요.'); renderWrite(); return; }
+    if(e.target.id==='dr-iss-add'){ DR.issues.push({issue:'',action:''}); renderWrite(); return; }
+    if(e.target.id==='dr-save'){ await saveDaily(false); return; }
+    if(e.target.id==='dr-submit'){ await saveDaily(true); return; }
+    if(e.target.id==='dr-copy'){ copyText($('dr-pre').textContent, '일일보고 문구를 복사했어요.'); return; }
+    if(e.target.id==='dr-xlsx'){ await downloadDailyXlsx(me.name, f.date, DR.done, DR.today, DR.issues, planFor(me.name, f.date)); return; }
+  });
+  $('dr-new').onsubmit = async e => {
+    e.preventDefault(); const t=$('dr-new-title').value.trim(); if(!t){ toast('새 업무명을 입력하세요.'); return; }
+    const kind=$('dr-new-kind').value, end=$('dr-new-end').value||null;
+    const parent = byId['WBS-INBOX'] ? 'WBS-INBOX' : null; if(!parent){ toast('미분류함이 없어요. 관리자에게 문의하세요.'); return; }
+    const id = await insertUnder(parent, {cat:t, kind, pic:me.name, st:'In Progress', start_date:ui.daily.date, end_date:end, prog:0, cyc:kind==='R'?'반복':'단발'}, '업무 등록');
+    if(!id) return;
+    DR.today.push(entryFromItem(byId[id], .3)); DR.dirty=true; toast(`${t} 업무를 등록했어요. (미분류함)`); renderWrite();
+  };
+}
+function copyText(t, msg){ (navigator.clipboard ? navigator.clipboard.writeText(t) : Promise.reject()).then(()=>toast(msg)).catch(()=>openText('일일보고', t)); }
+const cleanEntries = L => L.filter(e=>(e.title||'').trim());
+async function saveDaily(submit, quiet){
+  const f = ui.daily, now = new Date().toISOString();
+  DR.done = cleanEntries(DR.done); DR.today = cleanEntries(DR.today);
+  const issues = DR.issues.filter(x=>(x.issue||'').trim()||(x.action||'').trim());
+  const row = {report_date:f.date, author:me.name, issues, updated_at:now}; if(submit) row.submitted_at = now;
+  const { data:rep, error } = await sb.from('daily_reports').upsert(row, {onConflict:'author,report_date'}).select().single();
+  if(error){ toast('저장하지 못했어요: '+error.message); return; }
+  // 업무 반영 (제출할 때만): 전일 결과 진행률 → 업무, 금일 업무 → 진행 중
+  if(submit){
+    for(const e of DR.done){ const r = e.item_id && byId[e.item_id]; if(!r || !owns(r)) continue;
+      const p = Number(e.prog), patch = {prog:p};
+      if(p>=1) patch.st = e.note==='컨펌 대기' ? 'Review' : 'Completed'; else if(r.st==='Planned' || r.st==='Completed' || r.st==='Review') patch.st = 'In Progress';
+      await quickUpdate(r, patch); }
+    for(const e of DR.today){ const r = e.item_id && byId[e.item_id]; if(r && owns(r) && r.st==='Planned') await quickUpdate(r, {st:'In Progress'}); }
+  }
+  const plan = planFor(me.name, f.date);
+  await sb.from('daily_entries').delete().eq('report_id', rep.id);
+  const ents = [
+    ...DR.done.map((e,i)=>({report_id:rep.id, section:'done', item_id:e.item_id||null, kind:e.kind||'P', title:e.title.trim(), detail:e.detail||null, prog:e.prog==null?null:Number(e.prog), note:e.note||null, sort_order:i})),
+    ...DR.today.map((e,i)=>({report_id:rep.id, section:'today', item_id:e.item_id||null, kind:e.kind||'P', title:e.title.trim(), detail:e.detail||null, prog:e.prog==null?null:Number(e.prog), sort_order:i})),
+    ...(submit ? plan.map((p,i)=>({report_id:rep.id, section:'plan', item_id:p.item_id, kind:p.kind, title:p.title, detail:p.detail||null, due_date:p.due, status:p.status, sort_order:i})) : [])
+  ];
+  if(ents.length){ const { error:e2 } = await sb.from('daily_entries').insert(ents); if(e2){ toast('항목을 저장하지 못했어요: '+e2.message); return; } }
+  DR.report = rep; DR.dirty = false;
+  if(submit){
+    await sb.from('item_history').insert({item_id:'DAILY', changed_by:me.name, changes:`일일보고 제출 (${yymmdd(f.date)}) · 전일 ${DR.done.length}건 · 금일 ${DR.today.length}건`});
+    for(const x of issues){ const t = `${x.issue} ${x.action}`; const ms = mentionsIn(t).filter(n=>n!==me.name); if(ms.length) await sb.from('item_history').insert({item_id:'DAILY', changed_by:me.name, changes:`일일보고 이슈: ${x.issue}${x.action?' → '+x.action:''}`}); }
+    copyText(drText(me.name, f.date, DR.done, DR.today, issues, plan), '제출했어요. 일일보고 문구를 복사했어요 — 메신저에 붙여넣으세요.');
+  } else if(!quiet) toast('임시 저장했어요.');
+  if(!quiet) renderWrite();
+}
+async function downloadDailyXlsx(author, dateIso, done, todayL, issues, plan){
+  try{
+    if(!window.DailyXlsx) throw new Error('엑셀 기능을 불러오지 못했어요.');
+    if(!DR_TPL) DR_TPL = await (await fetch('templates/daily_report.xlsx', {cache:'no-cache'})).arrayBuffer();
+    const blob = await DailyXlsx.build(DR_TPL, {author, date:dateIso,
+      done: cleanEntries(done).map(e=>({kind:e.kind, title:e.title, detail:[e.detail, e.note&&Number(e.prog)>=1?`(${e.note})`:''].filter(Boolean).join(' '), prog:e.prog==null?null:Number(e.prog)})),
+      today: cleanEntries(todayL).map(e=>({kind:e.kind, title:e.title, detail:e.detail, prog:e.prog==null?null:Number(e.prog)})),
+      issues: issues.filter(x=>x.issue||x.action), plan: plan.map(p=>({kind:p.kind, title:p.title, detail:p.detail, due:p.due, status:p.status}))});
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `일일보고_${author}_${dateIso.replace(/-/g,'').slice(2)}.xlsx`; a.click();
+    setTimeout(()=>URL.revokeObjectURL(a.href), 4000);
+    toast('엑셀(팀 양식)로 내려받았어요.');
+  }catch(err){ toast('엑셀을 만들지 못했어요: '+err.message); }
+}
+
+// ---- 팀 일일보고 (날짜별 전원 · 미제출 · 이슈 · 공동 업무 · 주간 정리)
+async function renderTeamDaily(){
+  const box = $('dr-body'), f = ui.daily;
+  const { data:reps } = await sb.from('daily_reports').select('*').eq('report_date', f.date);
+  // 작성 대상: 로그인 계정이 있는 팀원(member) + 그날 보고를 쓴 사람
+  const memberNames = new Set(MEMBERS.filter(m=>m.role==='member').map(m=>m.name));
+  const people = [...new Set([...STAFF.filter(s=>s.active && memberNames.has(s.name)).map(s=>s.name), ...(reps||[]).map(r=>r.author)])];
+  const ids = (reps||[]).map(r=>r.id);
+  const { data:ents } = ids.length ? await sb.from('daily_entries').select('*').in('report_id', ids).order('sort_order') : {data:[]};
+  if(current()!=='daily' || ui.daily.mode!=='team') return;
+  const byA = {}; for(const r of reps||[]) byA[r.author] = {rep:r, done:[], today:[], plan:[]};
+  for(const e of ents||[]){ const r = (reps||[]).find(x=>x.id===e.report_id); if(r) byA[r.author][e.section].push({...e, due:e.due_date}); }
+  const sub = people.filter(p=>byA[p] && byA[p].rep.submitted_at), notYet = people.filter(p=>!(byA[p] && byA[p].rep.submitted_at));
+  const issues = (reps||[]).flatMap(r=>(r.issues||[]).map(x=>({...x, author:r.author})));
+  // 공동 업무: 하위 업무 담당자가 2명 이상인 상위 업무
+  const shared = items.filter(r=>r.lvl==='P' && r.kind!=='goal' && !DONE(r.st) && new Set(kids(r.id).map(k=>k.pic).filter(p=>p && p!=='전원')).size>=2);
+  $('dr-state').textContent = `제출 ${sub.length} / ${people.length}명`;
+  const card = p => { const x = byA[p]; if(!x) return `<div class="panel dr-card miss"><h2 class="sec">${esc(p)} <span class="chip k-bad">미작성</span></h2></div>`;
+    const t = drText(p, f.date, x.done, x.today, x.rep.issues||[], x.plan.map(e=>({...e, due:e.due_date})));
+    return `<div class="panel dr-card"><div class="dr-ch"><h2 class="sec" style="margin:0">${esc(p)} ${x.rep.submitted_at?`<span class="chip c-co">제출 ${new Date(x.rep.submitted_at).toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'})}</span>`:'<span class="chip k-warn">임시 저장</span>'}</h2><div class="spacer"></div><button class="linkbtn" type="button" data-tcopy="${esc(p)}">문구 복사</button><button class="linkbtn" type="button" data-txlsx="${esc(p)}">엑셀</button></div><pre class="dr-pre">${esc(t)}</pre></div>`; };
+  box.innerHTML = `
+    ${notYet.length?`<div class="calc" style="margin-bottom:12px"><div style="background:var(--warn-soft);color:var(--warn)">미제출: ${notYet.map(esc).join(', ')}</div></div>`:''}
+    <div class="dr-team">
+      <div class="dr-cards">${people.map(card).join('')}</div>
+      <aside class="dr-side">
+        <div class="panel"><h2 class="sec">오늘 이슈 <span class="hist" style="display:inline">${issues.length}건</span></h2>${issues.map(x=>`<div class="dr-ti"><b>${esc(x.author)}</b> ${richText(x.issue||'')}${x.action?`<div class="hist">→ ${esc(x.action)}</div>`:''}</div>`).join('')||'<div class="hist">이슈가 없어요.</div>'}</div>
+        <div class="panel"><h2 class="sec">공동 업무</h2>${shared.map(s=>{ const a=groupAgg(s); return `<div class="dr-sh"><button type="button" class="linkbtn" data-open="${s.id}"><b>${esc(s.cat)}</b></button> <span class="hist" style="display:inline">평균 ${pct(a.prog)}</span>${kids(s.id).map(k=>`<div class="dr-shr"><span>${esc(k.pic||'–')}</span><div class="pbar"><i style="width:${Math.round((k.prog||0)*100)}%"></i></div><span class="mono">${p100(k.prog)||'0%'}</span><span class="hist" style="display:inline">${k.end_date?yymmdd(k.end_date):''}</span>${check(k)==='지연'?chkChip('지연'):''}</div>`).join('')}</div>`; }).join('')||'<div class="hist">여러 명이 함께 하는 업무가 없어요.</div>'}</div>
+        <div class="panel"><h2 class="sec">주간 정리</h2><p class="hist" style="margin:0 0 8px">${(()=>{const [w0,w1]=weekOf(f.date); return `${fmtD(w0)} ~ ${fmtD(w1)}`;})()} 일일보고를 사람·업무별로 묶어 대표님 보고용 문구를 만들어요.</p><button class="btn" type="button" id="dr-week">주간 정리 복사</button></div>
+      </aside>
+    </div>`;
+  box.querySelectorAll('[data-open]').forEach(b=>b.onclick=()=>openDrawer(b.dataset.open));
+  box.querySelectorAll('[data-tcopy]').forEach(b=>b.onclick=()=>{ const x=byA[b.dataset.tcopy]; copyText(drText(b.dataset.tcopy, f.date, x.done, x.today, x.rep.issues||[], x.plan.map(e=>({...e, due:e.due_date}))), `${b.dataset.tcopy} 님 일일보고를 복사했어요.`); });
+  box.querySelectorAll('[data-txlsx]').forEach(b=>b.onclick=()=>{ const x=byA[b.dataset.txlsx]; downloadDailyXlsx(b.dataset.txlsx, f.date, x.done, x.today, x.rep.issues||[], x.plan.map(e=>({...e, due:e.due_date}))); });
+  $('dr-week').onclick = () => weeklyFromDaily(f.date);
+}
+async function weeklyFromDaily(dateIso){
+  const [w0,w1] = weekOf(dateIso);
+  const { data:reps } = await sb.from('daily_reports').select('id,author,report_date,issues').gte('report_date', iso(w0)).lte('report_date', iso(w1)).not('submitted_at','is',null);
+  const ids = (reps||[]).map(r=>r.id); if(!ids.length){ toast('이번 주에 제출된 일일보고가 없어요.'); return; }
+  const { data:ents } = await sb.from('daily_entries').select('*').in('report_id', ids).eq('section','done');
+  const out = [`[주간 업무 정리] ${fmtD(w0)} ~ ${fmtD(w1)}`];
+  for(const p of [...new Set(reps.map(r=>r.author))]){
+    const mine = reps.filter(r=>r.author===p).map(r=>r.id), m = {};
+    for(const e of ents.filter(e=>mine.includes(e.report_id))){ const k = e.item_id || e.title; const d = reps.find(r=>r.id===e.report_id).report_date; if(!m[k] || m[k].d < d) m[k] = {e, d}; }
+    const L = Object.values(m).sort((a,b)=>Number(b.e.prog)-Number(a.e.prog));
+    out.push('', `■ ${p}`, ...L.map(({e})=>`(${e.kind||'P'}) ${e.title}${e.detail?` : ${e.detail}`:''} — ${Number(e.prog)>=1?'완료':`진행률 ${p100(e.prog)}`}`));
+    const iss = reps.filter(r=>r.author===p).flatMap(r=>r.issues||[]).filter(x=>x.issue);
+    if(iss.length) out.push(...iss.map(x=>`  · 이슈: ${x.issue}${x.action?` → ${x.action}`:''}`));
+  }
+  copyText(out.join('\n'), '주간 정리 문구를 복사했어요.');
+}
+// 업무 상세 '일일 기록' 탭: 이 업무(와 하위 업무)가 일일보고에 어떻게 기록됐는지
+async function loadItemDaily(r){
+  const ids = [r.id, ...desc(r.id).map(x=>x.id)];
+  const { data, error } = await sb.from('daily_entries').select('section,title,detail,prog,note,item_id,daily_reports(report_date,author)').in('item_id', ids).neq('section','plan').limit(300);
+  const box = $('d-daily'); if(!box || selId!==r.id) return;
+  if(error){ box.innerHTML = '<div class="hist">일일 기록을 불러오지 못했어요.</div>'; return; }
+  const L = (data||[]).filter(e=>e.daily_reports).sort((a,b)=>b.daily_reports.report_date.localeCompare(a.daily_reports.report_date) || (a.section==='done'?-1:1));
+  box.innerHTML = L.length ? L.map(e=>`<div class="cmt"><div class="cmt-h"><b>${esc(e.daily_reports.author)}</b><span>${yymmdd(e.daily_reports.report_date)} · ${e.section==='done'?'전일 결과':'금일 목표'}</span><span style="margin-left:auto" class="mono">${p100(e.prog)}${e.note?` · ${esc(e.note)}`:''}</span></div><div class="cmt-b">${esc(e.title)}${e.detail?` : ${esc(e.detail)}`:''}</div></div>`).join('') : '<div class="cmt-empty">아직 일일보고에 기록되지 않았어요.</div>';
+}
+
 // ---------------- drawer (상세·편집)
 const drawer=$('drawer'), scrim=$('scrim');
 let drawerTab='info', drawerTabFor=null;
@@ -1148,6 +1413,7 @@ async function openDrawer(id, tab){
     <nav class="dtabs" role="tablist">
       <button type="button" role="tab" data-dt="info">상세</button>
       ${grp?'':`<button type="button" role="tab" data-dt="cmt">댓글 <span class="dn-c" id="d-cn">${CMT_N[r.id]||''}</span></button>`}
+      ${isTask(r)||r.lvl==='P'?'<button type="button" role="tab" data-dt="daily">일일 기록</button>':''}
       <button type="button" role="tab" data-dt="hist">변경 이력</button>
     </nav>
     <div class="body">
@@ -1164,6 +1430,7 @@ async function openDrawer(id, tab){
         <div class="field full"><label for="f-task">Task</label><textarea id="f-task">${esc(r.task||'')}</textarea></div>
         <div class="field"><label for="f-output">Output / Check</label><input id="f-output" value="${esc(r.output||'')}"></div>
         <div class="field"><label for="f-link">산출물 링크${/^https?:\/\//.test(r.link||'')?` · <a href="${esc(r.link)}" target="_blank" rel="noopener noreferrer">열기</a>`:''}</label><input id="f-link" placeholder="NAS 경로 또는 URL" value="${esc(r.link||'')}"></div>
+        ${isTask(r)?`<div class="field"><label for="f-kind">유형</label><select id="f-kind"><option value="P" ${r.kind==='P'||!r.kind?'selected':''}>P 프로젝트</option><option value="R" ${r.kind==='R'?'selected':''}>R 반복(루틴)</option><option value="goal" ${r.kind==='goal'?'selected':''}>목표·R&amp;R (일정 체크 제외)</option></select></div>`:''}
         <div class="field"><label for="f-brand">브랜드</label><select id="f-brand">${opt(BRANDS,r.brand)}${extraOpt(BRANDS,r.brand)}</select></div>
         <div class="field"><label for="f-cyc">주기</label><input id="f-cyc" list="cyc-list" value="${esc(r.cyc||'')}"><datalist id="cyc-list">${CYCLES.map(x=>`<option value="${x}">`).join('')}</datalist></div>
         <div class="field"><label for="f-pic">PIC</label><select id="f-pic">${opt(PEOPLE,r.pic)}${extraOpt(PEOPLE,r.pic)}</select></div>
@@ -1179,6 +1446,7 @@ async function openDrawer(id, tab){
       ${!grp && canEdit() && r.lvl!=='C' ? `<button class="addbtn" type="button" id="d-addchild" style="align-self:flex-start;margin:0">+ 이 업무 아래에 하위 업무 추가</button>`:''}
       </div>
       ${grp?'':`<div class="dpane" data-pane="cmt">${commentsHtml(r)}</div>`}
+      <div class="dpane" data-pane="daily"><div class="cmts" id="d-daily"><div class="hist">불러오는 중…</div></div></div>
       <div class="dpane" data-pane="hist"><div class="hist" id="d-hist"><div>불러오는 중…</div></div></div>
     </div>
     <footer class="dfoot" data-foot="info">${delButtons(r)}<button class="btn" type="button" id="d-cancel">${ro?'닫기':'취소'}</button>${ro?'':'<button class="btn primary" type="button" id="d-save">저장</button>'}</footer>
@@ -1187,7 +1455,8 @@ async function openDrawer(id, tab){
     drawerTab = t;
     drawer.querySelectorAll('[data-dt]').forEach(b=>{ b.classList.toggle('on', b.dataset.dt===t); b.setAttribute('aria-selected', b.dataset.dt===t); });
     drawer.querySelectorAll('[data-pane]').forEach(p=>p.hidden = p.dataset.pane!==t);
-    drawer.querySelectorAll('[data-foot]').forEach(f=>f.hidden = !(f.dataset.foot===t || (t==='hist' && f.dataset.foot==='info')));
+    drawer.querySelectorAll('[data-foot]').forEach(f=>f.hidden = !(f.dataset.foot===t || ((t==='hist'||t==='daily') && f.dataset.foot==='info')));
+    if(t==='daily') loadItemDaily(r);
     const bd = drawer.querySelector('.body');
     if(t==='cmt'){ bd.scrollTop = bd.scrollHeight; const ta=$('d-cbody'); if(ta) setTimeout(()=>ta.focus(), 30); } else bd.scrollTop = 0;
   };
@@ -1534,8 +1803,9 @@ scrim.addEventListener('click',closeDrawer);
 document.addEventListener('keydown',e=>{ if(e.key==='Escape'&&drawer.classList.contains('on')) closeDrawer(); });
 
 // ---------------- routing
-const VIEWS=['my','dashboard','wbs','req','weekly','cal','gantt','admin'];
+const VIEWS=['my','daily','dashboard','wbs','req','weekly','cal','gantt','admin'];
 const current=()=>{ const h=location.hash.slice(1); return VIEWS.includes(h)?h:'my'; };
+let lastView = null;
 function rerender(){
   if(!me) return;
   newsTabs();
@@ -1543,7 +1813,8 @@ function rerender(){
   document.querySelectorAll('#tabs a').forEach(a=>a.classList.toggle('on',a.dataset.v===v));
   document.querySelectorAll('.view').forEach(s=>s.classList.toggle('on',s.id==='v-'+v));
   if(v==='admin' && me.role!=='admin'){ location.hash='my'; return; }
-  if(v==='my') renderMy(); else if(v==='admin') renderAdmin(); else if(v==='dashboard') renderDashboard(); else if(v==='wbs'||v==='req') renderTable(v==='wbs'?'WBS':'REQ', document.activeElement && document.activeElement.id===v+'-q'); else if(v==='weekly') renderWeekly(); else if(v==='cal') renderCal(); else renderGantt();
+  const entering = lastView!==v; lastView = v;
+  if(v==='daily'){ if(entering || !$('dr-body')) renderDaily(); } else if(v==='my') renderMy(); else if(v==='admin') renderAdmin(); else if(v==='dashboard') renderDashboard(); else if(v==='wbs'||v==='req') renderTable(v==='wbs'?'WBS':'REQ', document.activeElement && document.activeElement.id===v+'-q'); else if(v==='weekly') renderWeekly(); else if(v==='cal') renderCal(); else renderGantt();
 }
 window.addEventListener('hashchange',()=>{ if(location.hash.includes('access_token')) return; rerender(); });
 document.querySelector('main').addEventListener('click',e=>{
