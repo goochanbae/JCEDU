@@ -622,3 +622,9 @@ input[type=date].bad{border-color:var(--bad,#e5484d)!important;background:#fff5f
 /* 상세 창 체크박스: 입력칸 100% 너비에서 제외 */
 .field input[type=checkbox]{width:auto;flex:none;padding:0;margin:0}
 .field .chk-inline{white-space:normal;justify-content:flex-start;text-align:left}
+
+/* 표 위 메뉴(검색·필터·버튼) 간격 넓게 */
+.toolbar{gap:10px 12px;margin-bottom:14px}
+.toolbar select,.toolbar input[type=date]{padding:7px 10px}
+.toolbar input[type=search]{padding:7px 12px}
+.toolbar .chk-inline{gap:6px;padding:0 4px}
