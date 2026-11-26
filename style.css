@@ -608,6 +608,7 @@ tr.task.d2 td.t-name .cat::before,tr.task.d3 td.t-name .cat::before{content:"└
 /* 날짜 범위 오류 */
 input[type=date].bad{border-color:var(--bad,#e5484d)!important;background:#fff5f5;box-shadow:0 0 0 2px rgba(229,72,77,.15)}
 .date-err{color:var(--bad,#e5484d);font-size:12px;font-weight:600;margin-top:-4px}
+.date-err[hidden],.date-err:empty{display:none!important}
 .date-err:not([hidden]){display:block}
 .date-err::before{content:"⚠ "}
 
@@ -617,3 +618,7 @@ input[type=date].bad{border-color:var(--bad,#e5484d)!important;background:#fff5f
 .toast::before{width:10px;height:10px}
 .toast.err::before{background:#ff5a5f}
 @media (max-width:640px){ .toast{font-size:15px;padding:16px 20px} }
+
+/* 상세 창 체크박스: 입력칸 100% 너비에서 제외 */
+.field input[type=checkbox]{width:auto;flex:none;padding:0;margin:0}
+.field .chk-inline{white-space:normal;justify-content:flex-start;text-align:left}
