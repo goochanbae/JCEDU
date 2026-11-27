@@ -275,7 +275,7 @@ const MOVABLE = {
   end:{label:'End', cls:'mono', cell:(r,a)=>isTask(r)?fmt(r.end_date):(a&&a.end?fmt(iso(a.end)):''), g:a=>a.end?fmt(iso(a.end)):''},
   dday:{label:'D-day', cls:'mono dday', cell:r=>{const d=dday(r); return `<span class="${d!=null&&d<0?'neg':''}">${ddTxt(d)}</span>`;}},
   chk:{label:'일정 체크', cls:'nw', cell:r=>chkChip(check(r))},
-  prog:{label:'진척 · 실적', cell:(r,a)=>isTask(r)&&r.cyc==='단발'?mini(r.prog,must(r)):(a&&a.prog!=null?mini(a.prog):(r.kpi_target?`<span class="mono" style="color:var(--muted)">월 ${r.kpi_actual??'–'}/${r.kpi_target}</span>`:'')), g:a=>a.prog!=null?mini(a.prog):''}
+  prog:{label:'진척 · 실적', cell:(r,a)=>isTask(r)&&(r.prog!=null||r.kind==='P'||r.cyc==='단발')?mini(r.prog,(r.kind==='P'||r.cyc==='단발')?must(r):null):(a&&a.prog!=null?mini(a.prog):(r.kpi_target?`<span class="mono" style="color:var(--muted)">월 ${r.kpi_actual??'–'}/${r.kpi_target}</span>`:'')), g:a=>a.prog!=null?mini(a.prog):''}
 };
 const DEFAULT_COLS = Object.keys(MOVABLE);
 let colOrder = (() => { try{ const s=JSON.parse(localStorage.getItem('jcwbs-cols')||'null'); if(Array.isArray(s) && s.length===DEFAULT_COLS.length && DEFAULT_COLS.every(k=>s.includes(k))) return s; }catch(e){} return [...DEFAULT_COLS]; })();
