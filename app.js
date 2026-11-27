@@ -55,7 +55,9 @@ function index(){ items.sort((a,b)=>a.sort_order-b.sort_order); byId = Object.fr
 function sortPlan(sh){
   const rows = items.filter(r=>r.sheet===sh), kidsOf = {};
   rows.forEach(r=>{ const k = r.parent && byId[r.parent] && byId[r.parent].sheet===sh ? r.parent : ''; (kidsOf[k] ||= []).push(r); });
-  const dk = r => r.end_date || '9999-12-31', out = [], base = sh==='REQ' ? 1000000 : 2000000; let i = 0;
+  const endOf = r => { const ts = r.lvl==='P' ? desc(r.id).filter(isTask).map(t=>t.end_date).filter(Boolean) : []; return ts.length ? ts.sort().pop() : r.end_date; };
+  const ek = {}; rows.forEach(r=>{ ek[r.id] = endOf(r) || '9999-12-31'; });
+  const dk = r => ek[r.id], out = [], base = sh==='REQ' ? 1000000 : 2000000; let i = 0;
   const walk = (pid, pnum) => {
     const cs = [...(kidsOf[pid]||[])].sort((a,b)=> pid==='' ? a.sort_order-b.sort_order : (dk(a)<dk(b)?-1:dk(a)>dk(b)?1:a.sort_order-b.sort_order));
     cs.forEach((c,k)=>{ const num = pid==='' ? c.num : `${pnum}.${k+1}`, so = base + (++i)*10;
@@ -89,6 +91,9 @@ function check(r){
 function must(r){ const s=pd(r.start_date), e=pd(r.end_date); if(!s||!e) return null; if(s>today) return 0; if(e<=today) return 1; const t=(e-s)/DAY; return t===0?1:((Math.min(today,e)-s)/DAY)/t; }
 function chkChip(c){ if(!c) return ''; const cls = c==='지연'?'k-late':c==='임박'?'k-soon':c.startsWith('⚠')?'k-warn':(c==='완료'||c==='취소')?'k-ok':c==='예정'?'k-plan':'k-run'; return `<span class="chip ${cls}">${esc(c)}</span>`; }
 function stChip(s){ return s ? `<span class="chip c-${ST_CLS[s]||'ca'}">${esc(ST_KO[s]||s)}</span>` : ''; }
+// 진척률 직접 입력 가능 여부: 목표 유형·상위 업무는 하위 업무 평균(자동), 체크리스트가 있으면 체크 비율(자동)
+function progEditable(r, ck){ return isTask(r) && r.kind!=='goal' && !(ck||ckStat(r.id)).n; }
+function progWhy(r, ck){ return r.kind==='goal' ? ' (목표: 하위 업무 평균 자동)' : !isTask(r) ? ' (하위 업무 평균 자동)' : (ck||ckStat(r.id)).n ? ' (체크리스트 자동)' : ''; }
 function mini(v,m){ return `<div class="mini"><div class="pbar"><i style="width:${Math.max(0,Math.min(1,v||0))*100}%"></i>${m!=null?`<b style="left:calc(${Math.min(1,m)*100}% - 1px)"></b>`:''}</div><span>${pct(v)}</span></div>`; }
 function groupAgg(g){
   const ts = desc(g.id).filter(isTask);
@@ -275,7 +280,7 @@ const MOVABLE = {
   end:{label:'End', cls:'mono', cell:(r,a)=>isTask(r)?fmt(r.end_date):(a&&a.end?fmt(iso(a.end)):''), g:a=>a.end?fmt(iso(a.end)):''},
   dday:{label:'D-day', cls:'mono dday', cell:r=>{const d=dday(r); return `<span class="${d!=null&&d<0?'neg':''}">${ddTxt(d)}</span>`;}},
   chk:{label:'일정 체크', cls:'nw', cell:r=>chkChip(check(r))},
-  prog:{label:'진척 · 실적', cell:(r,a)=>isTask(r)&&(r.prog!=null||r.kind==='P'||r.cyc==='단발')?mini(r.prog,(r.kind==='P'||r.cyc==='단발')?must(r):null):(a&&a.prog!=null?mini(a.prog):(r.kpi_target?`<span class="mono" style="color:var(--muted)">월 ${r.kpi_actual??'–'}/${r.kpi_target}</span>`:'')), g:a=>a.prog!=null?mini(a.prog):''}
+  prog:{label:'진척 · 실적', cell:(r,a)=>isTask(r)&&r.kind!=='goal'&&(r.prog!=null||r.kind==='P'||r.cyc==='단발')?mini(r.prog,(r.kind==='P'||r.cyc==='단발')?must(r):null):(a&&a.prog!=null?mini(a.prog):(r.kpi_target?`<span class="mono" style="color:var(--muted)">월 ${r.kpi_actual??'–'}/${r.kpi_target}</span>`:'')), g:a=>a.prog!=null?mini(a.prog):''}
 };
 const DEFAULT_COLS = Object.keys(MOVABLE);
 let colOrder = (() => { try{ const s=JSON.parse(localStorage.getItem('jcwbs-cols')||'null'); if(Array.isArray(s) && s.length===DEFAULT_COLS.length && DEFAULT_COLS.every(k=>s.includes(k))) return s; }catch(e){} return [...DEFAULT_COLS]; })();
@@ -658,8 +663,9 @@ async function loadChecks(){
 async function quickUpdate(r, patch){
   if(!owns(r)){ toast('담당자(PIC·Backup)나 등록한 사람만 수정할 수 있어요.'); return false; }
   { const dErr = rangeErr({...r, ...patch}); if(dErr){ toast(dErr); return false; } }
+  if('prog' in patch && !progEditable(r)){ delete patch.prog; if(!Object.keys(patch).length){ toast(r.kind==='goal'?'목표 업무의 진척률은 하위 업무 평균으로 자동 계산돼요.':'진척률은 자동 계산돼요.'); return false; } }
   const nextSt = patch.st!==undefined ? patch.st : r.st;
-  if(isTask(r) && patch.st==='Completed' && (r.prog==null || r.prog<1) && !ckStat(r.id).n) patch.prog = 1;
+  if(progEditable(r) && patch.st==='Completed' && (r.prog==null || r.prog<1)) patch.prog = 1;
   if(patch.prog!=null && patch.prog>0 && nextSt==='Planned' && patch.st===undefined) patch.st = 'In Progress';
   const changes = [];
   for(const k of Object.keys(patch)){
@@ -681,7 +687,7 @@ async function quickUpdate(r, patch){
 function myRow(r){
   const c = check(r), d = dday(r), ck = ckStat(r.id), ed = owns(r);
   const sub = [r.brand, r.num && `#${r.num}`, d!=null && ddTxt(d), ck.n && `체크 ${ck.done}/${ck.n}`].filter(Boolean).map(esc).join(' · ');
-  const seg = PROG_STEPS.map(p=>`<button type="button" data-pg="${p}" class="${r.prog!=null && Math.round(r.prog*100)>=p*100 && (p>0||r.prog===0)?'on':''}" ${ed&&!ck.n?'':'disabled'} title="${ck.n?'체크리스트로 자동 계산':Math.round(p*100)+'%'}">${Math.round(p*100)}</button>`).join('');
+  const seg = PROG_STEPS.map(p=>`<button type="button" data-pg="${p}" class="${r.prog!=null && Math.round(r.prog*100)>=p*100 && (p>0||r.prog===0)?'on':''}" ${ed&&progEditable(r,ck)?'':'disabled'} title="${progWhy(r,ck).replace(/[() ]/g,' ').trim()||Math.round(p*100)+'%'}">${Math.round(p*100)}</button>`).join('');
   return `<div class="mrow" data-row="${r.id}">
     <div class="mt"><button type="button" class="t" data-open="${r.id}">${shTag(r)}${esc(titleOf(r))}</button>${newsChip(r)}
       <div class="sub">${sub}${cmtBtn(r,true)}${c && c!=='진행' && c!=='예정' ? ' '+chkChip(c):''}${stale(r)?` <span class="chip k-warn">${ago(r.updated_at)} 업데이트</span>`:''}</div></div>
@@ -1541,7 +1547,7 @@ async function openDrawer(id, tab){
         <div class="field"><label for="f-pic">PIC</label><select id="f-pic">${opt(PEOPLE,r.pic)}${extraOpt(PEOPLE,r.pic)}</select></div>
         <div class="field"><label for="f-bak">Backup</label><select id="f-bak">${opt(PEOPLE,r.bak)}${extraOpt(PEOPLE,r.bak)}</select></div>
         <div class="field"><label for="f-st">진행 상태</label><select id="f-st">${opt(STATUS,r.st,STATUS.map(s=>ST_KO[s]))}</select></div>
-        <div class="field"><label for="f-prog">progress %${ck.n?' (체크리스트 자동)':''}</label><input id="f-prog" type="number" min="0" max="100" step="5" value="${r.prog!=null?Math.round(r.prog*100):''}" ${isTask(r)&&!ck.n?'':'disabled'}></div>
+        <div class="field"><label for="f-prog">progress %<span id="f-prog-why">${progWhy(r, ck)}</span></label><input id="f-prog" type="number" min="0" max="100" step="5" value="${r.kind==='goal'||!isTask(r)?'':r.prog!=null?Math.round(r.prog*100):''}" placeholder="${r.kind==='goal'||!isTask(r)?'하위 업무 평균':''}" ${progEditable(r, ck)?'':'disabled'}></div>
         <div class="field"><label for="f-start_date">Start</label><input id="f-start_date" data-dl="시작일" type="date" value="${r.start_date||''}" ${isTask(r)?'':'disabled'}></div>
         <div class="field"><label for="f-end_date">End</label><input id="f-end_date" data-dl="종료일" type="date" value="${r.end_date||''}" ${isTask(r)?'':'disabled'}></div>
         <div class="field full date-err" id="f-daterr" role="alert" hidden></div>
@@ -1572,6 +1578,7 @@ async function openDrawer(id, tab){
   $('d-close').onclick=closeDrawer; $('d-cancel').onclick=closeDrawer;
   if($('d-save')) $('d-save').onclick=()=>saveDrawer(r);
   bindDateCheck([['f-start_date','f-end_date']], $('f-daterr'));
+  if($('f-kind') && $('f-prog')) $('f-kind').addEventListener('change', () => { const t = {...r, kind:$('f-kind').value||null}; const ok = progEditable(t); $('f-prog').disabled = !ok; if(!ok){ $('f-prog').value=''; $('f-prog').placeholder='하위 업무 평균'; } else { $('f-prog').placeholder=''; if($('f-prog').value==='' && r.prog!=null && r.kind!=='goal') $('f-prog').value=Math.round(r.prog*100); } $('f-prog-why').textContent = progWhy(t); });
   bindDateCheck([['f-req_date','f-due_date'],['f-req_date','f-done_date']], $('f-reqerr'));
   if($('d-del')) $('d-del').onclick=()=>deleteItem(r);
   if($('d-req')) $('d-req').onclick=()=>requestDelete(r);
