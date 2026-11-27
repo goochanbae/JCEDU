@@ -50,6 +50,29 @@ const owns = r => !!me && !!r && (me.role==='admin' || (me.role==='member' && (r
 const kids = id => items.filter(r => r.parent===id);
 function desc(id){ const out=[]; for(const k of kids(id)){ out.push(k); out.push(...desc(k.id)); } return out; }
 function index(){ items.sort((a,b)=>a.sort_order-b.sort_order); byId = Object.fromEntries(items.map(r=>[r.id,r])); }
+// ---- 자동 정렬: 같은 상위 아래 업무는 마감일(End) 빠른 순, 마감일 없으면 맨 뒤. 번호(#)와 순서를 그에 맞춰 다시 매김
+// (DB 정리 SQL의 pg_temp.resort와 같은 규칙. 카테고리 순서는 그대로)
+function sortPlan(sh){
+  const rows = items.filter(r=>r.sheet===sh), kidsOf = {};
+  rows.forEach(r=>{ const k = r.parent && byId[r.parent] && byId[r.parent].sheet===sh ? r.parent : ''; (kidsOf[k] ||= []).push(r); });
+  const dk = r => r.end_date || '9999-12-31', out = [], base = sh==='REQ' ? 1000000 : 2000000; let i = 0;
+  const walk = (pid, pnum) => {
+    const cs = [...(kidsOf[pid]||[])].sort((a,b)=> pid==='' ? a.sort_order-b.sort_order : (dk(a)<dk(b)?-1:dk(a)>dk(b)?1:a.sort_order-b.sort_order));
+    cs.forEach((c,k)=>{ const num = pid==='' ? c.num : `${pnum}.${k+1}`, so = base + (++i)*10;
+      if(c.num!==num || c.sort_order!==so) out.push([c.id, {num, sort_order:so}]); walk(c.id, num); });
+  };
+  walk('', null); return out;
+}
+const SORT_Q = new Set(); let SORT_T = null;
+function queueSort(...sheets){ sheets.filter(Boolean).forEach(x=>SORT_Q.add(x)); clearTimeout(SORT_T); SORT_T = setTimeout(runSort, 300); }
+async function runSort(){
+  const shs = [...SORT_Q]; SORT_Q.clear(); let n = 0;
+  for(const sh of shs) for(const [id, p] of sortPlan(sh)){
+    const { error } = await sb.from('items').update(p).eq('id', id);   // updated_at은 그대로 (NEW 표시 안 생김)
+    if(!error && byId[id]){ Object.assign(byId[id], p); n++; }
+  }
+  if(n){ index(); if(!$('drawer').classList.contains('on')) rerender(); }
+}
 function dday(r){ if(!isTask(r)) return null; const e=pd(r.end_date); if(!e||r.st==='Completed'||r.st==='Canceled') return null; return Math.round((e-today)/DAY); }
 function check(r){
   if(!isTask(r) || r.kind==='goal') return '';   // 목표·R&R은 일정 체크 대상 아님
@@ -651,15 +674,16 @@ async function quickUpdate(r, patch){
   if(!data.length){ await loadItems(); rerender(); toast('다른 사람이 먼저 수정했어요. 최신 내용으로 다시 불러왔어요.'); return false; }
   Object.assign(r, norm(data[0]));
   await sb.from('item_history').insert({item_id:r.id, changed_by:me.name, changes:changes.join(' / ')});
+  if('end_date' in patch) queueSort(r.sheet);
   return true;
 }
 
 function myRow(r){
   const c = check(r), d = dday(r), ck = ckStat(r.id), ed = owns(r);
-  const sub = [r.brand, r.num && `${r.sheet==='REQ'?'REQ ':''}${r.num}`, d!=null && ddTxt(d), ck.n && `체크 ${ck.done}/${ck.n}`].filter(Boolean).map(esc).join(' · ');
+  const sub = [r.brand, r.num && `#${r.num}`, d!=null && ddTxt(d), ck.n && `체크 ${ck.done}/${ck.n}`].filter(Boolean).map(esc).join(' · ');
   const seg = PROG_STEPS.map(p=>`<button type="button" data-pg="${p}" class="${r.prog!=null && Math.round(r.prog*100)>=p*100 && (p>0||r.prog===0)?'on':''}" ${ed&&!ck.n?'':'disabled'} title="${ck.n?'체크리스트로 자동 계산':Math.round(p*100)+'%'}">${Math.round(p*100)}</button>`).join('');
   return `<div class="mrow" data-row="${r.id}">
-    <div class="mt"><button type="button" class="t" data-open="${r.id}">${esc(titleOf(r))}</button>${newsChip(r)}
+    <div class="mt"><button type="button" class="t" data-open="${r.id}">${shTag(r)}${esc(titleOf(r))}</button>${newsChip(r)}
       <div class="sub">${sub}${cmtBtn(r,true)}${c && c!=='진행' && c!=='예정' ? ' '+chkChip(c):''}${stale(r)?` <span class="chip k-warn">${ago(r.updated_at)} 업데이트</span>`:''}</div></div>
     <select data-st aria-label="진행 상태" ${ed?'':'disabled'}>${STATUS.map(s=>`<option value="${s}" ${s===r.st?'selected':''}>${ST_KO[s]}</option>`).join('')}${r.st?'':'<option value="" selected>상태 없음</option>'}</select>
     <div class="seg" role="group" aria-label="진척률">${seg}</div>
@@ -667,9 +691,10 @@ function myRow(r){
     ${r.memo?`<div class="memo">${esc(r.memo)}</div>`:''}
   </div>`;
 }
+const shTag = r => `<span class="sh-tag ${r.sheet==='REQ'?'req':'wbs'}" title="${r.sheet==='REQ'?'대표님 REQ 업무':'WBS 업무'}">${r.sheet==='REQ'?'REQ':'WBS'}</span>`;
 function bCard(r){
   const d=dday(r), ck=ckStat(r.id);
-  return `<div class="bcard" draggable="${owns(r)}" data-card="${r.id}"><button type="button" class="t" data-open="${r.id}">${esc(titleOf(r))}</button>${newsChip(r)}
+  return `<div class="bcard" draggable="${owns(r)}" data-card="${r.id}"><button type="button" class="t" data-open="${r.id}">${shTag(r)}${esc(titleOf(r))}</button>${newsChip(r)}
     <div class="sub">${[r.brand, d!=null&&ddTxt(d), r.prog!=null&&pct(r.prog), ck.n&&`체크 ${ck.done}/${ck.n}`].filter(Boolean).map(esc).join(' · ')} ${cmtBtn(r)}${check(r)==='지연'?chkChip('지연'):''}</div></div>`;
 }
 
@@ -874,7 +899,7 @@ async function insertUnder(parentId, fields, label){
   if(error){ toast('등록하지 못했어요: '+error.message); return null; }
   if(p.lvl==='T' || p.lvl==='C'){ await sb.from('items').update({lvl:'P', updated_by:me.name, updated_at:new Date().toISOString()}).eq('id',p.id); p.lvl='P'; }
   await sb.from('item_history').insert({item_id:id, changed_by:me.name, changes:`${label||'업무 추가'} (${p.cat} 하위)`});
-  items.push(norm(data[0])); index();
+  items.push(norm(data[0])); index(); queueSort(p.sheet);
   return id;
 }
 
@@ -1595,6 +1620,7 @@ async function saveDrawer(r){
   Object.assign(r, norm(data[0]));
   await sb.from('item_history').insert({item_id:r.id, changed_by:me.name, changes:changes.join(' / ')});
   if(moving) await moveItem(r,newParent);
+  queueSort(r.sheet);
   toast(`${changes.length}개 항목을 저장했습니다.`);
   openDrawer(r.id);
 }
@@ -1670,8 +1696,8 @@ async function placeItem(r, target, mode){
   const newNum = (patch[r.id].num) || r.num;
   FLASH_ID = r.id;
   await sb.from('item_history').insert({item_id:r.id, changed_by:me.name, changes:`${cross?`시트 이동: ${SHEET_KO[fromSheet]} → ${SHEET_KO[np.sheet]} · `:''}상위 항목 이동: ${old?old.num+' '+old.cat:'–'} → ${np.num} ${np.cat} (새 번호 ${newNum})`});
-  await loadItems();
-  toast(`${r.id}를 ${cross?SHEET_KO[np.sheet]+'의 ':''}${np.cat} ${mode==='into'?'맨 아래로':mode==='before'?`의 ${target.id} 앞으로`:`의 ${target.id} 다음으로`} 옮겼어요.`);
+  await loadItems(); queueSort(fromSheet, np.sheet);
+  toast(`${r.id}를 ${cross?SHEET_KO[np.sheet]+'의 ':''}${np.cat} 아래로 옮겼어요. 순서는 마감일 순으로 자동 정렬돼요.`);
   return true;
 }
 async function moveItem(r, newParentId){ return placeItem(r, byId[newParentId], 'into'); }
@@ -1768,7 +1794,7 @@ async function deleteItem(r){
     await sb.from('item_history').insert({item_id:x.id, changed_by:me.name, changes:`삭제${r.delete_requested_by?` (요청: ${r.delete_requested_by})`:''}: ${x.cat||''} / ${x.task||''}`});
   }
   if(old && old.lvl==='P' && kids(old.id).filter(x=>x.id!==r.id).length===0) await sb.from('items').update({lvl:leafLvl(old), updated_by:me.name, updated_at:new Date().toISOString()}).eq('id',old.id);
-  await loadItems(); toast(`${r.lvl==='L1'?'카테고리':r.id}를 삭제했습니다.`); closeDrawer();
+  await loadItems(); queueSort(r.sheet); toast(`${r.lvl==='L1'?'카테고리':r.id}를 삭제했습니다.`); closeDrawer();
 }
 
 // ---- 담당자 관리 (관리자 전용): staff 목록 + 로그인 계정(members) 연결
