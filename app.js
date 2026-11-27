@@ -98,7 +98,8 @@ function mini(v,m){ return `<div class="mini"><div class="pbar"><i style="width:
 function groupAgg(g){
   const ts = desc(g.id).filter(isTask);
   const ss = ts.map(t=>pd(t.start_date)).filter(Boolean), es = ts.map(t=>pd(t.end_date)).filter(Boolean);
-  const pr = ts.filter(t=>t.prog!=null).map(t=>Number(t.prog));
+  // 진척률 평균: 입력 안 한 하위 업무는 0%로 계산 (목표 유형·취소 업무는 제외)
+  const pr = ts.filter(t=>t.kind!=='goal' && t.st!=='Canceled').map(t=>Number(t.prog)||0);
   return {start:ss.length?new Date(Math.min(...ss)):null, end:es.length?new Date(Math.max(...es)):null, prog:pr.length?pr.reduce((a,b)=>a+b,0)/pr.length:null, n:ts.length};
 }
 function sheetStats(sheet){
